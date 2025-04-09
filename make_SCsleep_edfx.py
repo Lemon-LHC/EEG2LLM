@@ -7,8 +7,15 @@ import shutil
 import glob
 import re
 import multiprocessing
+import warnings  # 添加warnings模块
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from transformers import AutoTokenizer  
+from scipy import interpolate  # 添加用于插值的包
+from collections import Counter  # 添加用于统计的包
+
+# 在脚本开始时过滤MNE相关警告
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=UserWarning, module="mne")
 
 # 加载分词器
 tokenizer_path = "/data/lhc/models/Llama-3.2-1B-Instruct"
@@ -113,24 +120,45 @@ def clean_output_directories(base_dir):
         # 如果目录不存在，创建它
         os.makedirs(processed_dir, exist_ok=True)
 
-def read_edf_file(edf_path):
+def interpolate_signal(signal, original_sfreq, target_sfreq):
+    """对信号进行插值以增加采样率
+    
+    参数:
+        signal: 原始信号数据数组，形状为 [n_channels, n_points]
+        original_sfreq: 原始采样频率 (Hz)
+        target_sfreq: 目标采样频率 (Hz)
+        
+    返回:
+        插值后的信号数据数组
+    """
+    if original_sfreq == target_sfreq:
+        return signal
+    
+    # 创建原始时间点（以秒为单位）
+    n_points = signal.shape[1]
+    original_times = np.arange(n_points) / original_sfreq
+    
+    # 创建新的时间点（以秒为单位）
+    ratio = target_sfreq / original_sfreq
+    n_new_points = int(n_points * ratio)
+    new_times = np.linspace(0, original_times[-1], n_new_points)
+    
+    # 对每个通道进行插值
+    interpolated_signal = np.zeros((signal.shape[0], n_new_points))
+    
+    for ch_idx in range(signal.shape[0]):
+        # 使用三次样条插值
+        f = interpolate.interp1d(original_times, signal[ch_idx, :], kind='cubic', bounds_error=False, fill_value="extrapolate")
+        interpolated_signal[ch_idx, :] = f(new_times)
+    
+    return interpolated_signal
+
+def read_edf_file(edf_path, target_sfreq=100):
     """读取EDF文件并进行预处理"""
-    # 使用verbose=False减少警告
-    raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
-    sfreq = raw.info['sfreq']
-    # h_freq = min(40.0, sfreq / 2.5)  # 设置高通滤波频率
-    h_freq = 50    
-    try:
-        # 使用多线程进行滤波处理
-        n_jobs_filter = min(4, multiprocessing.cpu_count())  
-        raw.filter(l_freq=0.1, h_freq=h_freq, n_jobs=n_jobs_filter, verbose=False)
-    except Exception as e:
-        print(f"滤波器应用失败，但将继续处理: {str(e)}")
-
-    # 不进行重采样，使用原始采样率
-    # 注释掉重采样代码，保留原始信号的采样率
-    # raw.resample(100, n_jobs=1, verbose=False)
-
+    # 使用verbose='error'只显示错误，忽略警告
+    raw = mne.io.read_raw_edf(edf_path, preload=True, verbose='error')
+    original_sfreq = raw.info['sfreq']
+    
     # 检查并保留指定通道
     channels_to_keep = ['EEG Fpz-Cz', 'EEG Pz-Oz']
     available_channels = []
@@ -142,7 +170,7 @@ def read_edf_file(edf_path):
         raise ValueError("No required channels found in the data")
 
     # 使用新的API方式避免警告
-    raw.pick(available_channels, verbose=False)
+    raw.pick(available_channels, verbose='error')
     
     # 检查数据是否有效
     data = raw.get_data()
@@ -159,7 +187,13 @@ def read_edf_file(edf_path):
         data = data * scale_factor
         # 创建新的RawArray对象
         info = raw.info
-        raw = mne.io.RawArray(data, info, verbose=False)
+        raw = mne.io.RawArray(data, info, verbose='error')
+    
+    # 如果目标采样率与原始采样率不同，则进行重采样
+    if target_sfreq != original_sfreq:
+        print(f"将采样率从 {original_sfreq}Hz 通过重采样调整为 {target_sfreq}Hz")
+        # 使用MNE的resample方法而不是直接修改info['sfreq']
+        raw.resample(target_sfreq, npad='auto', verbose='error')
     
     return raw, available_channels
 
@@ -282,11 +316,18 @@ def find_annotation_file(edf_path):
     
     return annotation_files[0]
 
-def process_and_save_direct(edf_path, annotation_path, output_base_dir):
-    """直接处理并保存到最终目录结构，确保各数据集中标签分布平衡"""
+def process_and_save_direct(edf_path, annotation_path, output_base_dir, target_sfreq=100):
+    """直接处理并保存到最终目录结构，确保各数据集中标签分布平衡
+    
+    参数:
+        edf_path: EDF文件路径
+        annotation_path: 注释文件路径
+        output_base_dir: 输出基础目录
+        target_sfreq: 目标采样频率 (Hz)
+    """
     try:
         print(f"处理文件 {os.path.basename(edf_path)}...")
-        raw, channel_names = read_edf_file(edf_path)
+        raw, channel_names = read_edf_file(edf_path, target_sfreq)
         annotations = mne.read_annotations(annotation_path)
         features = extract_stage_windows(raw, annotations, channel_names)
 
@@ -411,15 +452,20 @@ Your response must be a single number (0, 1, 2, 3, 4, or 5) corresponding to the
         traceback.print_exc()
         return 0
 
-def process_single_file(edf_file):
-    """处理单个EDF文件并返回提取的特征"""
+def process_single_file(edf_file, target_sfreq=100):
+    """处理单个EDF文件并返回提取的特征
+    
+    参数:
+        edf_file: EDF文件路径
+        target_sfreq: 目标采样频率 (Hz)
+    """
     # 查找对应的注释文件
     annotation_file = find_annotation_file(edf_file)
     
     if annotation_file:
         try:
             # 处理文件并获取特征
-            raw, channel_names = read_edf_file(edf_file)
+            raw, channel_names = read_edf_file(edf_file, target_sfreq)
             annotations = mne.read_annotations(annotation_file)
             features = extract_stage_windows(raw, annotations, channel_names)
             
@@ -438,7 +484,129 @@ def process_single_file(edf_file):
         print(f"找不到 {os.path.basename(edf_file)} 的注释文件")
         return []
 
-def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
+def balance_dataset(data, strategy="balanced", balance_alpha=0.7, weight_method="sqrt_inverse"):
+    """对数据集进行平衡处理
+    
+    参数:
+        data: 要平衡的数据列表，每个元素应该是包含"output"字段的字典
+        strategy: 平衡策略，可以是"balanced"(平衡采样)或"original"(保持原始分布)
+        balance_alpha: 平衡系数，0表示完全均衡，1表示保持原始分布
+        weight_method: 权重计算方法，可以是"inverse"(反比)、"sqrt_inverse"(平方根反比)或"log_inverse"(对数反比)
+        
+    返回:
+        平衡后的数据列表
+    """
+    if strategy == "original":
+        print(f"使用原始分布策略，不进行平衡处理")
+        return data
+    
+    # 统计每个标签的样本数量
+    label_counts = Counter([int(item["output"]) for item in data])
+    total_samples = len(data)
+    print(f"原始数据分布: {dict(label_counts)}")
+    
+    # 计算目标分布
+    if strategy == "balanced":
+        # 计算均匀分布
+        n_classes = len(label_counts)
+        uniform_dist = {label: 1.0/n_classes for label in label_counts.keys()}
+        
+        # 计算原始分布
+        original_dist = {label: count/total_samples for label, count in label_counts.items()}
+        
+        # 使用balance_alpha融合均匀分布和原始分布
+        target_dist = {}
+        for label in label_counts.keys():
+            target_dist[label] = balance_alpha * original_dist[label] + (1 - balance_alpha) * uniform_dist[label]
+        
+        # 归一化目标分布
+        dist_sum = sum(target_dist.values())
+        target_dist = {label: prob/dist_sum for label, prob in target_dist.items()}
+        
+        print(f"平衡后目标分布: {target_dist}")
+    else:
+        raise ValueError(f"不支持的平衡策略: {strategy}")
+    
+    # 根据权重方法计算每个样本的权重
+    label_weights = {}
+    if weight_method == "inverse":
+        # 使用频率的倒数作为权重
+        for label, count in label_counts.items():
+            label_weights[label] = 1.0 / count if count > 0 else 0
+    elif weight_method == "sqrt_inverse":
+        # 使用频率平方根的倒数作为权重
+        for label, count in label_counts.items():
+            label_weights[label] = 1.0 / np.sqrt(count) if count > 0 else 0
+    elif weight_method == "log_inverse":
+        # 使用频率对数的倒数作为权重
+        for label, count in label_counts.items():
+            label_weights[label] = 1.0 / np.log(count + 1)
+    else:
+        raise ValueError(f"不支持的权重方法: {weight_method}")
+    
+    # 归一化权重
+    weight_sum = sum(label_weights.values())
+    label_weights = {label: weight/weight_sum for label, weight in label_weights.items()}
+    
+    # 按标签分组
+    samples_by_label = {label: [] for label in label_counts.keys()}
+    for item in data:
+        label = int(item["output"])
+        samples_by_label[label].append(item)
+    
+    # 计算每个标签需要的样本数
+    target_counts = {}
+    target_total = total_samples  # 保持总样本数不变
+    for label, prob in target_dist.items():
+        target_counts[label] = int(target_total * prob)
+    
+    # 调整目标计数以确保总和等于目标总样本数
+    count_diff = target_total - sum(target_counts.values())
+    if count_diff != 0:
+        # 将差额分配给样本最多的类别
+        max_label = max(label_counts, key=label_counts.get)
+        target_counts[max_label] += count_diff
+    
+    # 构建平衡后的数据集
+    balanced_data = []
+    for label, target_count in target_counts.items():
+        available_samples = samples_by_label[label]
+        
+        if not available_samples:
+            print(f"警告: 标签 {label} 没有可用样本")
+            continue
+        
+        # 如果需要的样本比可用的多，进行过采样（随机重复采样）
+        if target_count > len(available_samples):
+            # 先添加所有可用样本
+            sampled = available_samples.copy()
+            # 然后随机采样剩余需要的样本
+            additional_needed = target_count - len(available_samples)
+            additional_samples = np.random.choice(available_samples, size=additional_needed, replace=True)
+            sampled.extend(additional_samples)
+            print(f"标签 {label}: 过采样从 {len(available_samples)} 到 {target_count} 个样本")
+        # 如果需要的样本比可用的少，进行欠采样（随机选择一部分）
+        elif target_count < len(available_samples):
+            sampled = list(np.random.choice(available_samples, size=target_count, replace=False))
+            print(f"标签 {label}: 欠采样从 {len(available_samples)} 到 {target_count} 个样本")
+        # 如果刚好相等，直接使用全部样本
+        else:
+            sampled = available_samples
+            print(f"标签 {label}: 保持 {len(available_samples)} 个样本不变")
+        
+        balanced_data.extend(sampled)
+    
+    # 打乱平衡后的数据
+    np.random.shuffle(balanced_data)
+    
+    print(f"平衡后: 总计 {len(balanced_data)} 个样本")
+    # 验证平衡后的分布
+    balanced_counts = Counter([int(item["output"]) for item in balanced_data])
+    print(f"平衡后的实际分布: {dict(balanced_counts)}")
+    
+    return balanced_data
+
+def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1, target_sfreq=100, balance_strategy="balanced", balance_alpha=0.7, weight_method="sqrt_inverse"):
     """处理整个目录中的所有EDF文件，并确保标签分布平衡
     
     参数:
@@ -446,6 +614,10 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
         output_dirs: 包含训练集、测试集和全部数据集输出目录的字典，格式为 {'train': train_dir, 'test': test_dir, 'all': all_dir}
         max_files: 最大处理文件数
         n_jobs: 并行处理的进程数
+        target_sfreq: 目标采样频率 (Hz)
+        balance_strategy: 平衡策略
+        balance_alpha: 平衡系数
+        weight_method: 权重计算方法
     """
     # 提取各个输出目录
     train_output_dir = output_dirs['train']
@@ -476,8 +648,8 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
     if n_jobs > 1:
         print(f"启动并行处理，使用 {n_jobs} 个进程...")
         with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            # 提交所有任务
-            futures = [executor.submit(process_single_file, edf_file) for edf_file in edf_files]
+            # 提交所有任务，传递目标采样率
+            futures = [executor.submit(process_single_file, edf_file, target_sfreq) for edf_file in edf_files]
             
             # 收集结果
             for future in tqdm(as_completed(futures), total=len(futures), desc="处理EDF文件"):
@@ -498,7 +670,7 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
                 try:
                     # 处理文件并获取特征
                     print(f"处理文件 {os.path.basename(edf_file)}...")
-                    raw, channel_names = read_edf_file(edf_file)
+                    raw, channel_names = read_edf_file(edf_file, target_sfreq)
                     annotations = mne.read_annotations(annotation_file)
                     features = extract_stage_windows(raw, annotations, channel_names)
                     
@@ -536,7 +708,7 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
     median_samples = int(np.median(stage_counts))
     print(f"\n各阶段样本数量中位数: {median_samples}")
     
-    # 对每个阶段进行平衡采样
+    # 对每个阶段进行平衡采样（原始实现方式）
     balanced_by_stage = {}
     np.random.seed(42)  
     
@@ -561,9 +733,9 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
             balanced_by_stage[stage] = samples
             print(f"阶段 {stage}: 保留所有 {len(samples)} 个样本")
     
-    # 创建训练集和测试集
-    train_data = []
-    test_data = []
+    # 创建训练集和测试集（原始实现）
+    original_train_data = []
+    original_test_data = []
     
     for stage, balanced_samples in balanced_by_stage.items():
         if not balanced_samples:
@@ -571,11 +743,30 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
             
         # 按9:1比例分割
         split_idx = int(len(balanced_samples) * 0.9)
-        train_data.extend(balanced_samples[:split_idx])
-        test_data.extend(balanced_samples[split_idx:])
+        original_train_data.extend(balanced_samples[:split_idx])
+        original_test_data.extend(balanced_samples[split_idx:])
     
     # 打印分割后的数据集信息
-    print(f"\n平衡后 - 训练集: {len(train_data)} 个样本, 测试集: {len(test_data)} 个样本")
+    print(f"\n原始平衡后 - 训练集: {len(original_train_data)} 个样本, 测试集: {len(original_test_data)} 个样本")
+    
+    # 使用新的平衡策略处理数据（新实现）
+    print(f"\n使用新的平衡策略处理数据 (策略={balance_strategy}, 平衡系数={balance_alpha}, 权重方法={weight_method})...")
+    
+    # 分割原始数据为训练集和测试集（按9:1比例）
+    np.random.seed(42)
+    np.random.shuffle(all_data)
+    train_split_idx = int(len(all_data) * 0.9)
+    raw_train_data = all_data[:train_split_idx]
+    raw_test_data = all_data[train_split_idx:]
+    
+    # 对训练集和测试集分别进行平衡处理
+    balanced_train_data = balance_dataset(raw_train_data, strategy=balance_strategy, 
+                                         balance_alpha=balance_alpha, weight_method=weight_method)
+    # 测试集保持原始分布
+    balanced_test_data = raw_test_data
+    
+    # 打印新平衡后的数据集信息
+    print(f"\n新平衡后 - 训练集: {len(balanced_train_data)} 个样本, 测试集: {len(balanced_test_data)} 个样本")
     
     # 验证训练集和测试集中各标签的分布
     def print_stage_distribution(dataset, name):
@@ -588,19 +779,27 @@ def process_directory(input_dir, output_dirs, max_files=10, n_jobs=1):
         for stage in sorted(stage_counts.keys()):
             print(f"阶段 {stage}: {stage_counts[stage]} 个样本")
     
-    print_stage_distribution(train_data, "训练集")
-    print_stage_distribution(test_data, "测试集")
+    print("\n== 原始平衡方式的分布 ==")
+    print_stage_distribution(original_train_data, "原始平衡训练集")
+    print_stage_distribution(original_test_data, "原始平衡测试集")
+    
+    print("\n== 新平衡方式的分布 ==")
+    print_stage_distribution(balanced_train_data, "新平衡训练集")
+    print_stage_distribution(balanced_test_data, "新平衡测试集")
     
     # 转换格式为Alpaca格式
     system_prompt = "You are a neurobiological expert specializing in EEG data analysis and sleep stage classification."
-    task_instruction = """Your task is to analyze the provided EEG data (including voltage values from the Fpz-Cz and Pz-Oz channels) and determine the current sleep stage of the volunteer based on the following classification criteria:
+    # 计算窗口长度（秒）
+    window_length_sec = window_length_ms / 1000
+    
+    task_instruction = f"""Your task is to analyze the provided EEG data (including voltage values from the Fpz-Cz and Pz-Oz channels) and determine the current sleep stage of the volunteer based on the following classification criteria:
 0: Wakefulness (W)
 1: Non-rapid eye movement sleep stage 1 (N1)
 2: Non-rapid eye movement sleep stage 2 (N2)
 3: Non-rapid eye movement sleep stage 3 (N3)
 4: Non-rapid eye movement sleep stage 4 (N4)
 5: Rapid eye movement sleep stage (R)
-The EEG data is provided in the format (time in milliseconds, Fpz-Cz voltage in μV, Pz-Oz voltage in μV). The data spans 1000ms with a sampling interval of 5ms. In your analysis, pay attention to the following characteristics of each sleep stage:
+The EEG data is provided in the format: 'channel names > data points', where each data point is formatted as 'Fpz-Cz voltage in μV, Pz-Oz voltage in μV' and separated by '>' symbols. For example: 'EEG Fpz-Cz, EEG Pz-Oz>30.12,1.11>-65.46,11.92>-13.17,33.13>'. The data spans {window_length_ms}ms ({window_length_sec} seconds) with a sampling interval that depends on the original sampling rate. In your analysis, pay attention to the following characteristics of each sleep stage:
 - Wakefulness (W): High-frequency, low-amplitude waves.
 - N1: Low-amplitude, mixed-frequency waves.
 - N2: Sleep spindles and K-complexes.
@@ -614,19 +813,26 @@ Your response must be a single number (0, 1, 2, 3, 4, or 5) corresponding to the
             "instruction": task_instruction,
             "input": item["input"],
             "output": item["output"],
-            "system": system_prompt
+            "system": item["system"]
         } for item in data]
     
     # 对训练集和测试集进行随机打乱
     np.random.seed(42)  
-    np.random.shuffle(train_data)
-    np.random.shuffle(test_data)
+    np.random.shuffle(original_train_data)
+    np.random.shuffle(original_test_data)
+    np.random.shuffle(balanced_train_data)
+    np.random.shuffle(balanced_test_data)
     
-    print("\n已对训练集和测试集数据进行随机打乱")
+    print("\n已对所有数据集进行随机打乱")
     
-    train_alpaca = convert_to_alpaca(train_data)
-    test_alpaca = convert_to_alpaca(test_data)
-    all_alpaca = convert_to_alpaca(train_data + test_data)
+    # 转换为Alpaca格式
+    original_train_alpaca = convert_to_alpaca(original_train_data)
+    original_test_alpaca = convert_to_alpaca(original_test_data)
+    original_all_alpaca = convert_to_alpaca(original_train_data + original_test_data)
+    
+    balanced_train_alpaca = convert_to_alpaca(balanced_train_data)
+    balanced_test_alpaca = convert_to_alpaca(balanced_test_data)
+    balanced_all_alpaca = convert_to_alpaca(balanced_train_data + balanced_test_data)
     
     # 保存数据集
     def save_dataset(data, filename, output_directory):
@@ -640,41 +846,61 @@ Your response must be a single number (0, 1, 2, 3, 4, or 5) corresponding to the
     # 计算token数量
     print("计算token数量...")
     # 只计算一个样本的token数量作为参考
-    if train_alpaca:
-        token_info = calculate_tokens(train_alpaca[0])
+    if balanced_train_alpaca:
+        token_info = calculate_tokens(balanced_train_alpaca[0])
         avg_total_tokens = token_info["total_tokens"]
         print(f"样本token统计 - 指令: {token_info['instruction_tokens']}, 输入: {token_info['input_tokens']}, 总计: {token_info['total_tokens']}")
     else:
         avg_total_tokens = 0
         print("没有训练样本可供计算token")
     
-    # 将max_files的大小、窗口长度、采样频率和token数量体现在文件名上（移除数据量信息）
-    # 现在代码使用原始采样率和30000ms(30秒)窗口长度进行处理
-    
     # 使用全局变量window_length_ms
-    sampling_rate = 100      
+    sampling_rate = target_sfreq      
     
-    # 使用传入的max_files参数来构建文件名，而不是实际处理的文件数量
-    # 这样可以确保文件名与main()函数中设置的max_files保持一致
-    # 去掉数据量信息部分(_n{数量})，保持文件名一致性
+    # 构建文件名前缀
     base_prefix = f"edf{max_files}_{sampling_rate}hz_{window_length_ms}ms_tok{avg_total_tokens}_"
     
-    # 保存数据集到各自的目录，不再在文件名中包含数据量信息
-    train_filename = f"{base_prefix}train.json"
-    test_filename = f"{base_prefix}test.json"
-    all_filename = f"{base_prefix}all_data.json"
+    # 保存原始平衡方式的数据集
+    print("\n保存原始平衡方式的数据集...")
+    original_train_filename = f"{base_prefix}train.json"
+    original_test_filename = f"{base_prefix}test.json"
+    original_all_filename = f"{base_prefix}all_data.json"
     
-    # 保存到指定的输出目录
-    save_dataset(train_alpaca, train_filename, train_output_dir)
-    save_dataset(test_alpaca, test_filename, test_output_dir)
-    save_dataset(all_alpaca, all_filename, all_output_dir)
+    save_dataset(original_train_alpaca, original_train_filename, train_output_dir)
+    save_dataset(original_test_alpaca, original_test_filename, test_output_dir)
+    save_dataset(original_all_alpaca, original_all_filename, all_output_dir)
     
-    # # 更新dataset_info.json文件
-    # update_dataset_info(train_filename, train_output_dir)
-    # update_dataset_info(test_filename, test_output_dir)
+    # 保存新平衡方式的数据集
+    print("\n保存新平衡方式的数据集...")
+    # 构建平衡后缀，避免重复"balanced"单词
+    # 只有当策略不是"balanced"时才包含策略名称
+    strategy_part = f"{balance_strategy}_" if balance_strategy != "balanced" else ""
+    balanced_suffix = f"balanced_{strategy_part}{balance_alpha}_{weight_method}"
+    balanced_train_filename = f"{base_prefix}{balanced_suffix}_train.json"
+    balanced_test_filename = f"{base_prefix}{balanced_suffix}_test.json"
+    balanced_all_filename = f"{base_prefix}{balanced_suffix}_all_data.json"
     
-    print(f"\n处理完成。总样本: {len(all_alpaca)}，训练集: {len(train_alpaca)}，测试集: {len(test_alpaca)}，平均token数: {avg_total_tokens}")
-    return len(train_data) + len(test_data)
+    balanced_train_dir = os.path.join(train_output_dir, "balanced")
+    balanced_test_dir = os.path.join(test_output_dir, "balanced")
+    balanced_all_dir = os.path.join(all_output_dir, "balanced")
+    
+    os.makedirs(balanced_train_dir, exist_ok=True)
+    os.makedirs(balanced_test_dir, exist_ok=True)
+    os.makedirs(balanced_all_dir, exist_ok=True)
+    
+    save_dataset(balanced_train_alpaca, balanced_train_filename, balanced_train_dir)
+    save_dataset(balanced_test_alpaca, balanced_test_filename, balanced_test_dir)
+    save_dataset(balanced_all_alpaca, balanced_all_filename, balanced_all_dir)
+    
+    # 更新dataset_info.json文件
+    update_dataset_info(original_train_filename, train_output_dir)
+    update_dataset_info(balanced_train_filename, balanced_train_dir)
+    
+    print(f"\n处理完成。")
+    print(f"原始平衡: 总样本: {len(original_all_alpaca)}，训练集: {len(original_train_alpaca)}，测试集: {len(original_test_alpaca)}")
+    print(f"新平衡: 总样本: {len(balanced_all_alpaca)}，训练集: {len(balanced_train_alpaca)}，测试集: {len(balanced_test_alpaca)}")
+    print(f"平均token数: {avg_total_tokens}")
+    return len(balanced_train_data) + len(balanced_test_data)
 
 def calculate_tokens(sample):
     """计算样本的token数量"""
@@ -723,29 +949,29 @@ def calculate_tokens(sample):
         }
 
 def update_dataset_info(train_filename, output_dir):
-    """更新dataset_info.json文件中的信息"""
+    """更新dataset_info.json文件中的信息，增强错误处理能力"""
     dataset_info_path = "/data/lhc/projects/LLaMA-Factory/data/dataset_info.json"
+    backup_path = dataset_info_path + ".bak"
     
-    # 读取dataset_info.json文件
+    # 备份原始文件
     try:
-        with open(dataset_info_path, 'r', encoding='utf-8') as f:
-            dataset_info = json.load(f)
+        shutil.copy2(dataset_info_path, backup_path)
+        print(f"已创建备份文件: {backup_path}")
     except Exception as e:
-        print(f"读取dataset_info.json文件出错: {str(e)}")
-        return
+        print(f"创建备份文件失败: {str(e)}")
     
-    # 更新dataset_info.json文件中的信息
+    # 创建新的dataset_info数据
     train_key = train_filename.replace('.json', '')
     
-    # 提取token数量（文件名已不再包含样本数量信息）
+    # 提取token数量
     token_count = 0
-    sample_count = 0  # 仍然保留这个变量，但现在需要通过其他方式获取
     match = re.search(r'tok(\d+)_', train_filename)
     if match:
         token_count = int(match.group(1))
-        
-    # 尝试读取训练文件获取样本数量
+    
+    # 读取训练文件获取样本数量
     train_file_path = os.path.join(output_dir, train_filename)
+    sample_count = 0
     try:
         if os.path.exists(train_file_path):
             with open(train_file_path, 'r', encoding='utf-8') as f:
@@ -756,14 +982,12 @@ def update_dataset_info(train_filename, output_dir):
     except Exception as e:
         print(f"读取训练文件获取样本数量时出错: {str(e)}")
     
-    # 确定相对路径（从LLaMA-Factory/data目录到实际文件位置）
+    # 确定相对路径
     relative_path = os.path.relpath(output_dir, "/data/lhc/projects/LLaMA-Factory/data")
     
-    # 更新dataset_info.json文件中的信息
-    train_info = {
-        # 使用script_url指向包含数据的目录
+    # 新数据集信息
+    new_info = {
         "script_url": relative_path,
-        # 使用file_name指定文件名
         "file_name": train_filename,
         "columns": {
             "prompt": "instruction",
@@ -775,18 +999,38 @@ def update_dataset_info(train_filename, output_dir):
         "sample_count": sample_count
     }
     
-    dataset_info[train_key] = train_info
-    
-    # 保存更新后的dataset_info.json文件
+    # 尝试读取并更新现有文件
     try:
+        # 读取文件
+        with open(dataset_info_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # 尝试解析JSON
+        try:
+            dataset_info = json.loads(content)
+            # 更新数据
+            dataset_info[train_key] = new_info
+            # 写入更新后的文件
+            with open(dataset_info_path, 'w', encoding='utf-8') as f:
+                json.dump(dataset_info, f, ensure_ascii=False, indent=2)
+            print(f"更新dataset_info.json文件成功，添加了 {train_key} 数据集")
+            return
+        except json.JSONDecodeError:
+            print("JSON解析失败，将创建新文件")
+    except Exception as e:
+        print(f"读取文件失败: {str(e)}")
+    
+    # 如果上述步骤失败，创建新文件
+    try:
+        dataset_info = {train_key: new_info}
         with open(dataset_info_path, 'w', encoding='utf-8') as f:
             json.dump(dataset_info, f, ensure_ascii=False, indent=2)
-        print(f"更新dataset_info.json文件成功，添加了 {train_key} 数据集")
+        print(f"已创建新的dataset_info.json文件，包含 {train_key} 数据集")
     except Exception as e:
-        print(f"更新dataset_info.json文件出错: {str(e)}")
+        print(f"创建新文件失败: {str(e)}")
 
 # 全局变量
-window_length_ms = 30000  
+window_length_ms = 10000  
 
 def main():
     # 设置
@@ -802,16 +1046,30 @@ def main():
     os.makedirs(test_output_dir, exist_ok=True)
     os.makedirs(all_output_dir, exist_ok=True)
     
-    # 最大文件数
-    max_files = 5
+    # 最大文件数 - 减少文件数量，降低内存需求
+    max_files = 197  # 从5减少到2
     
-    # CPU核心数
-    n_jobs = max(1, int(multiprocessing.cpu_count() * 0.75))
+    # 采样率选择 (100Hz 或 200Hz)
+    target_sampling_rate = 200  # 可以设置为100或200
+    
+    # 平衡数据集参数
+    balance_strategy = "balanced"  # balanced 或 original
+    balance_alpha = 0.7           # 平衡系数，0表示完全均衡，1表示保持原始分布
+    weight_method = "sqrt_inverse" # inverse, sqrt_inverse, 或 log_inverse
+    
+    # CPU核心数 - 减少并行进程，降低内存压力
+    n_jobs = max(1, int(multiprocessing.cpu_count() * 0.75))  # 从0.75减少到0.5
     print(f"使用 {n_jobs} 个CPU核心")
     
     # 处理文件
-    print(f"处理文件...")
-    process_directory(base_dir, {'train': train_output_dir, 'test': test_output_dir, 'all': all_output_dir}, max_files, n_jobs=n_jobs)
+    print(f"处理文件，目标采样率: {target_sampling_rate}Hz...")
+    print(f"平衡策略: {balance_strategy}, 平衡系数: {balance_alpha}, 权重方法: {weight_method}")
+    
+    # 修改process_directory调用，传入目标采样率和平衡参数
+    process_directory(base_dir, {'train': train_output_dir, 'test': test_output_dir, 'all': all_output_dir}, 
+                     max_files, n_jobs=n_jobs, target_sfreq=target_sampling_rate,
+                     balance_strategy=balance_strategy, balance_alpha=balance_alpha,
+                     weight_method=weight_method)
 
 if __name__ == "__main__":
     main()

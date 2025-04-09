@@ -8,8 +8,8 @@ SCRIPT_DIR="/data/lhc/projects/fine"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
 MODEL_NAME="/data/lhc/models/Llama-3.2-1B-Instruct"
 DATASET_DIR="/data/lhc/datasets_new/sleep"
-TRAIN_DATASET="edf197_100hz_15000ms_tok12521_train"  # 根据实际情况修改
-TEST_DATASET="edf197_100hz_15000ms_tok12521_test"    # 根据实际情况修改
+TRAIN_DATASET="edf197_200hz_10000ms_tok16521_train"  # 根据实际情况修改
+TEST_DATASET="edf197_200hz_10000ms_tok16521_test"    # 根据实际情况修改
 
 # 创建输出目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -49,7 +49,7 @@ python "${TRAIN_SCRIPT}" \
   --train_dataset $TRAIN_DATASET \
   --test_dataset $TEST_DATASET \
   --sampling_strategy "balanced" \
-  --balance_alpha 0.5 \
+  --balance_alpha 0.7 \
   --class_weight_method "sqrt_inverse" \
   --base_output_dir $RESULTS_DIR \
   --export_dir $EXPORT_DIR \
@@ -58,8 +58,8 @@ python "${TRAIN_SCRIPT}" \
   --train_batch_size 1 \
   --grad_accum_steps 4 \
   --lora_rank 8 \
-  --save_steps 3000 \
-  --cutoff_len 12530 \
+  --save_steps 5000 \
+  --cutoff_len 16521 \
   --test_interval 3000 2>&1 | tee "${LOG_FILE}
    "
 

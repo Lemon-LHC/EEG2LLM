@@ -1,0 +1,88 @@
+import os
+import subprocess
+import glob
+
+def run_test_evaluation_script(checkpoint_dir, test_data_path, tensorboard_dir, global_step, device="cuda", detail_metrics=True, batch_size=8, half_precision=True):
+    """运行测试评估脚本
+    
+    Args:
+        checkpoint_dir: 检查点目录
+        test_data_path: 测试数据路径
+        tensorboard_dir: TensorBoard日志目录
+        global_step: 当前步数
+        device: 使用的设备
+        detail_metrics: 是否记录详细的分类指标
+        batch_size: 评估时的批处理大小
+        half_precision: 是否使用半精度加速评估
+        
+    Returns:
+        bool: 评估是否成功
+    """
+    print(f"\n[检测到检查点] 开始测试集评估 (步数: {global_step})")
+    
+    # 获取测试脚本的绝对路径
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_script = os.path.join(script_dir, "test_during_training.py")
+    
+    if not os.path.exists(test_script):
+        print(f"错误: 测试脚本不存在: {test_script}")
+        return False
+    
+    # 构建命令
+    cmd = [
+        "python", test_script,
+        "--checkpoint_dir", checkpoint_dir,
+        "--test_data_path", test_data_path,
+        "--tensorboard_dir", tensorboard_dir,
+        "--global_step", str(global_step),
+        "--device", device,
+        "--detail_metrics", "true" if detail_metrics else "false",
+        "--batch_size", str(batch_size),
+        "--half_precision", "true" if half_precision else "false"
+    ]
+    
+    # 运行命令
+    try:
+        print(f"执行测试命令: {' '.join(cmd)}")
+        
+        # 设置环境变量
+        env = os.environ.copy()
+        env["MKL_THREADING_LAYER"] = "GNU"  # 设置MKL线程层为GNU以避免与libgomp冲突
+        env["PYTHONPATH"] = f"{script_dir}:{env.get('PYTHONPATH', '')}"  # 确保能找到相关模块
+        
+        # 运行进程并实时显示输出
+        process = subprocess.Popen(
+            cmd, 
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # 实时输出日志
+        for line in process.stdout:
+            print(line, end='')
+        
+        # 等待进程完成
+        process.wait()
+        
+        if process.returncode == 0:
+            print(f"成功评估检查点: {checkpoint_dir}")
+            # 验证TensorBoard日志是否已写入
+            tensorboard_files = glob.glob(os.path.join(tensorboard_dir, "events.out.tfevents*"))
+            if tensorboard_files:
+                print(f"发现TensorBoard事件文件: {[os.path.basename(f) for f in tensorboard_files]}")
+                return True
+            else:
+                print(f"警告: 未找到TensorBoard事件文件，指标可能未被记录")
+                return False
+        else:
+            print(f"评估检查点失败，返回码: {process.returncode}")
+            return False
+    except Exception as e:
+        print(f"运行评估脚本时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return False 

@@ -8,8 +8,8 @@ SCRIPT_DIR="/data/lhc/projects/fine"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
 MODEL_NAME="/data/lhc/models/Llama-3.2-1B-Instruct"
 DATASET_DIR="/data/lhc/datasets_new/sleep"
-TRAIN_DATASET="edf197_200hz_10000ms_tok16521_train"  # 根据实际情况修改
-TEST_DATASET="edf197_200hz_10000ms_tok16521_test"    # 根据实际情况修改
+TRAIN_DATASET="train/balanced/edf197_200hz_7500ms_tok12588_balanced_0.5_sqrt_inverse_train"  # 完整的相对路径
+TEST_DATASET="test/balanced/edf197_200hz_7500ms_tok12588_balanced_0.5_sqrt_inverse_test"     # 完整的相对路径
 
 # 创建输出目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -19,7 +19,7 @@ LOG_FILE="${RESULTS_DIR}/train.log"
 
 # 提取模型短名称和数据集信息，用于构建导出路径
 MODEL_SHORT_NAME=$(basename $MODEL_NAME)
-DATASET_INFO=${TRAIN_DATASET}
+DATASET_INFO=$(basename ${TRAIN_DATASET})
 # 构建标准化的导出路径
 EXPORT_DIR="/data/lhc/models_new/${MODEL_SHORT_NAME}_${DATASET_INFO}"
 
@@ -41,6 +41,17 @@ echo "模型导出路径: ${EXPORT_DIR}"
 echo "使用训练脚本: ${TRAIN_SCRIPT}"
 echo "切换到工作目录: ${SCRIPT_DIR}"
 
+# 检查训练和测试数据集是否存在
+if [ ! -f "${DATASET_DIR}/${TRAIN_DATASET}.json" ]; then
+  echo "错误: 训练数据集文件不存在: ${DATASET_DIR}/${TRAIN_DATASET}.json"
+  exit 1
+fi
+
+if [ ! -f "${DATASET_DIR}/${TEST_DATASET}.json" ]; then
+  echo "错误: 测试数据集文件不存在: ${DATASET_DIR}/${TEST_DATASET}.json"
+  exit 1
+fi
+
 # 切换到脚本所在目录并运行，使用tee同时输出到终端和日志文件
 cd "${SCRIPT_DIR}"
 python "${TRAIN_SCRIPT}" \
@@ -48,7 +59,7 @@ python "${TRAIN_SCRIPT}" \
   --dataset_dir $DATASET_DIR \
   --train_dataset $TRAIN_DATASET \
   --test_dataset $TEST_DATASET \
-  --sampling_strategy "balanced" \
+  --sampling_strategy "original" \
   --balance_alpha 0.7 \
   --class_weight_method "sqrt_inverse" \
   --base_output_dir $RESULTS_DIR \
@@ -59,9 +70,8 @@ python "${TRAIN_SCRIPT}" \
   --grad_accum_steps 4 \
   --lora_rank 8 \
   --save_steps 5000 \
-  --cutoff_len 16521 \
-  --test_interval 3000 2>&1 | tee "${LOG_FILE}
-   "
+  --cutoff_len 16588 \
+  --test_interval 5000 2>&1 | tee "${LOG_FILE}"
 
 EXITCODE=${PIPESTATUS[0]}  # 获取python命令的退出码，而不是tee的退出码
 if [ $EXITCODE -eq 0 ]; then

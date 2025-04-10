@@ -1030,7 +1030,7 @@ def update_dataset_info(train_filename, output_dir):
         print(f"创建新文件失败: {str(e)}")
 
 # 全局变量
-window_length_ms = 10000  
+window_length_ms = 7500  
 
 def main():
     # 设置
@@ -1047,14 +1047,14 @@ def main():
     os.makedirs(all_output_dir, exist_ok=True)
     
     # 最大文件数 - 减少文件数量，降低内存需求
-    max_files = 197  # 从5减少到2
+    max_files = 197
     
     # 采样率选择 (100Hz 或 200Hz)
     target_sampling_rate = 200  # 可以设置为100或200
     
     # 平衡数据集参数
     balance_strategy = "balanced"  # balanced 或 original
-    balance_alpha = 0.7           # 平衡系数，0表示完全均衡，1表示保持原始分布
+    balance_alpha = 0.5          # 平衡系数，0表示完全均衡，1表示保持原始分布
     weight_method = "sqrt_inverse" # inverse, sqrt_inverse, 或 log_inverse
     
     # CPU核心数 - 减少并行进程，降低内存压力

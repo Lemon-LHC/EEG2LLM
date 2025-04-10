@@ -15,6 +15,7 @@ import numpy as np
 import sys
 import argparse
 import subprocess
+import shlex
 from dataset_balancer import update_dataset_config
 
 def parse_arguments():
@@ -90,10 +91,11 @@ def main():
     model_name_short = os.path.basename(args.model_name)
     output_dir = os.path.join(args.base_output_dir, f"{model_name_short}_{train_dataset_name}")
     
-    # 使用llamafactory-cli的train命令
-    # 参考：https://github.com/hiyouga/LLaMA-Factory/blob/main/README_zh.md
-    train_cmd = [
-        "cd", "/data/lhc/projects/LLaMA-Factory", "&&",  # 切换到LLaMA-Factory目录
+    # 构建llamafactory-cli的train命令
+    llama_factory_dir = "/data/lhc/projects/LLaMA-Factory"
+    
+    # 构建基本命令参数
+    train_args = [
         "llamafactory-cli", "train",
         f"--model_name_or_path={args.model_name}",
         f"--dataset={train_dataset_name}",
@@ -112,32 +114,57 @@ def main():
         f"--lora_alpha={args.lora_alpha}",
         f"--lora_dropout={args.lora_dropout}",
         f"--logging_steps={args.logging_steps}",
-        f"--save_steps={args.save_steps}"
+        f"--save_steps={args.save_steps}",
+        "--do_train", # 显式指定执行训练
+        "--report_to=none" # 防止wandb等报告工具干扰
     ]
     
     # 添加测试集评估
     if test_dataset_name:
-        train_cmd.extend([
+        train_args.extend([
             f"--eval_dataset={test_dataset_name}",
-            f"--eval_steps={args.test_interval}"
+            f"--eval_steps={args.test_interval}",
+            "--do_eval" # 显式指定执行评估
         ])
     
     # 添加导出目录参数（如果指定）
     if args.export_dir:
         export_dir = args.export_dir if args.export_dir else f"/data/lhc/models_new/{model_name_short}_{train_dataset_name}"
-        train_cmd.append(f"--export_dir={export_dir}")
+        train_args.append(f"--export_dir={export_dir}")
     
-    # 将命令列表转换为shell命令字符串
-    cmd_str = " ".join(train_cmd)
-    print(f"执行训练命令: {cmd_str}")
+    # 打印将要执行的命令
+    print(f"将在目录 {llama_factory_dir} 中执行:")
+    print(" ".join(train_args))
     
-    # 启动训练进程
     try:
-        # 使用shell=True执行完整的shell命令
-        result = subprocess.run(cmd_str, shell=True, check=True)
-        return result.returncode == 0
-    except subprocess.CalledProcessError as e:
-        print(f"训练命令执行失败: {e}")
+        # 使用Popen执行命令并实时输出结果
+        process = subprocess.Popen(
+            train_args,
+            cwd=llama_factory_dir, # 设置工作目录，而不是使用cd命令
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # 实时输出日志
+        print("训练开始，输出实时日志...")
+        for line in process.stdout:
+            print(line, end='')  # 实时打印输出
+        
+        # 等待进程完成
+        returncode = process.wait()
+        
+        if returncode == 0:
+            print("训练成功完成!")
+            return True
+        else:
+            print(f"训练失败，返回代码: {returncode}")
+            return False
+            
+    except Exception as e:
+        print(f"执行训练命令时发生错误: {e}")
         return False
 
 if __name__ == "__main__":

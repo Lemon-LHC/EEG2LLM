@@ -57,17 +57,17 @@ def parse_arguments():
                         help="模型路径")
     parser.add_argument("--dataset_dir", type=str, default="/data/lhc/datasets_new/sleep", 
                         help="数据集目录")
-    parser.add_argument("--train_dataset", type=str, default="edf197_100hz_10000ms_tok8521_train", 
+    parser.add_argument("--train_dataset", type=str, default="/balanced/edf197_200hz_10000ms_tok16588_balanced_0.7_sqrt_inverse_train.json", 
                         help="训练数据集名称或相对于dataset_dir的路径")
-    parser.add_argument("--test_dataset", type=str, default="edf197_100hz_10000ms_tok8521_test", 
+    parser.add_argument("--test_dataset", type=str, default="/balanced/edf197_200hz_10000ms_tok16588_balanced_0.7_sqrt_inverse_test.json", 
                         help="测试数据集名称或相对于dataset_dir的路径")
     
     # 训练参数
-    parser.add_argument("--cutoff_len", type=int, default=8600, 
+    parser.add_argument("--cutoff_len", type=int, default=16588, 
                         help="序列截断长度")
     parser.add_argument("--learning_rate", type=float, default=5e-05, 
                         help="学习率")
-    parser.add_argument("--num_epochs", type=float, default=1.0, 
+    parser.add_argument("--num_epochs", type=float, default=3.0, 
                         help="训练轮数")
     parser.add_argument("--max_samples", type=int, default=40000, 
                         help="最大样本数")
@@ -117,14 +117,17 @@ def setup_directories(args):
     model_short_name = os.path.basename(args.model_name.rstrip('/'))
     
     # 从数据集名称中提取信息
-    dataset_info = args.train_dataset.split('.')[0]
+    dataset_info = os.path.basename(args.train_dataset).split('.')[0]
     result_prefix = f"{model_short_name}_{dataset_info}"
     
     # 生成包含模型和数据集信息的输出目录名
     # 使用绝对路径，确保输出到/data/lhc/saves/目录
     output_dir = f"/data/lhc/saves/{model_short_name}/lora/{dataset_info}"
-    train_data_path = os.path.join(args.dataset_dir, "train", f"{args.train_dataset}.json")
-    test_data_path = os.path.join(args.dataset_dir, "test", f"{args.test_dataset}.json")
+    
+    # 直接使用提供的路径构建完整数据集路径
+    train_data_path = os.path.join(args.dataset_dir, f"{args.train_dataset}.json")
+    test_data_path = os.path.join(args.dataset_dir, f"{args.test_dataset}.json")
+    
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     # 仅在实际需要使用时创建此目录，避免创建空目录
     eval_output_dir = f"{args.base_output_dir}/{result_prefix}_{timestamp}"

@@ -8,8 +8,8 @@ SCRIPT_DIR="/data/lhc/projects/fine"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
 MODEL_NAME="/data/lhc/models/Llama-3.2-1B-Instruct"
 DATASET_DIR="/data/lhc/datasets_new/sleep"
-TRAIN_DATASET="train/balanced/edf197_200hz_7500ms_tok12588_balanced_0.5_sqrt_inverse_train"  # 完整的相对路径
-TEST_DATASET="test/balanced/edf197_200hz_7500ms_tok12588_balanced_0.5_sqrt_inverse_test"     # 完整的相对路径
+TRAIN_DATASET="train/edf10_200hz_7500ms_tok12588_balanced_0.1_sqrt_inverse_train"  # 完整的相对路径
+TEST_DATASET="test/edf10_200hz_7500ms_tok12588_balanced_0.1_sqrt_inverse_test"     # 完整的相对路径
 
 # 创建输出目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -60,7 +60,7 @@ python "${TRAIN_SCRIPT}" \
   --train_dataset $TRAIN_DATASET \
   --test_dataset $TEST_DATASET \
   --sampling_strategy "original" \
-  --balance_alpha 0.7 \
+  --balance_alpha 0.1 \
   --class_weight_method "sqrt_inverse" \
   --base_output_dir $RESULTS_DIR \
   --export_dir $EXPORT_DIR \

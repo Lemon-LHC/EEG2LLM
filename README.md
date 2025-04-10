@@ -22,7 +22,7 @@
 
 ### 系统要求
 - 操作系统：Ubuntu 20.04.6 LTS (Focal Fossa)
-- GPU：NVIDIA GeForce RTX 3090 (24GB显存)
+- GPU：4*NVIDIA GeForce RTX 3090 (24GB显存)
 - CUDA版本：12.2
 - NVIDIA驱动版本：535.183.01
 

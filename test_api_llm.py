@@ -502,10 +502,10 @@ def save_results(results, metrics, test_data, save_dir, model_name="unknown_mode
     plt.ylabel('True Label')
     plt.title('Sleep Stage Classification Confusion Matrix')
     plt.tight_layout()
-    cm_path = os.path.join(result_dir, 'confusion_matrix.png')
+    cm_path = os.path.join(save_dir, 'confusion_matrix.png')
     plt.savefig(cm_path)
     plt.close()
-    print(f"Confusion matrix saved to: {cm_path}")
+    print(f"混淆矩阵已保存至: {cm_path}")
     
     # 保存测试样本分布统计
     class_counts = {}
@@ -557,221 +557,8 @@ def save_results(results, metrics, test_data, save_dir, model_name="unknown_mode
             f.write(f"  {label_name}: {acc:.4f}\n")
     print(f"Test summary saved to: {summary_path}")
     
-    # 保存结果为Excel表格文件
-    try:
-        # 导入必要的模块
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-        from openpyxl.styles.differential import DifferentialStyle
-        from openpyxl.formatting.rule import Rule
-        from datetime import datetime
-
-        excel_path = os.path.join(save_dir, 'results_summary.xlsx')
-        
-        # 创建一个Excel工作簿
-        wb = Workbook()
-        
-        # 设置单元格样式
-        header_font = Font(bold=True, size=12)
-        header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-        center_alignment = Alignment(horizontal='center', vertical='center')
-        border = Border(
-            left=Side(style='thin'), 
-            right=Side(style='thin'), 
-            top=Side(style='thin'), 
-            bottom=Side(style='thin')
-        )
-        
-        # 计算各睡眠阶段的样本数
-        class_counts = {}
-        for r in results:
-            label = r['true_label']
-            if label not in class_counts:
-                class_counts[label] = 0
-            class_counts[label] += 1
-        
-        # 1. 总体指标摘要工作表
-        ws_summary = wb.active
-        ws_summary.title = "总体指标"
-        
-        # 添加标题和基本信息
-        ws_summary.append(["睡眠阶段分类测试结果摘要"])
-        ws_summary.append(["测试时间", datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-        ws_summary.append(["模型名称", model_name])
-        ws_summary.append(["测试集名称", test_set_name])
-        ws_summary.append([])  # 空行
-        
-        # 数据集统计信息
-        ws_summary.append(["数据集统计"])
-        ws_summary.append(["总样本数", len(test_data)])
-        ws_summary.append(["有效预测样本数", len([r for r in results if r['prediction'] != -1])])
-        ws_summary.append([])  # 空行
-        
-        # 整体性能指标
-        ws_summary.append(["整体性能指标"])
-        ws_summary.append(["总体准确率", metrics['accuracy']])
-        ws_summary.append(["宏平均F1分数", metrics['f1_macro']])
-        ws_summary.append(["平均推理时间(秒/样本)", metrics['avg_inference_time']])
-        ws_summary.append([])  # 空行
-        
-        # 各睡眠阶段准确率
-        ws_summary.append(["各睡眠阶段准确率"])
-        headers = ["睡眠阶段", "准确率"]
-        ws_summary.append(headers)
-        
-        for class_idx, label_name in enumerate(SLEEP_STAGE_LABELS):
-            acc = metrics['class_accuracies'][class_idx]
-            ws_summary.append([label_name, acc])
-            
-        # 应用样式
-        for cell in ws_summary[1][0:1]:
-            cell.font = Font(bold=True, size=14)
-            
-        for row in range(6, 18):
-            if row == 6 or row == 10 or row == 14:
-                for cell in ws_summary[row]:
-                    cell.font = Font(bold=True)
-                    cell.fill = header_fill
-        
-        # 2. 混淆矩阵工作表
-        ws_cm = wb.create_sheet("混淆矩阵")
-        
-        # 添加标题
-        ws_cm.append(["睡眠阶段分类混淆矩阵"])
-        ws_cm.merge_cells('A1:G1')
-        ws_cm['A1'].font = Font(bold=True, size=14)
-        ws_cm['A1'].alignment = center_alignment
-        
-        # 添加列标题
-        headers = ["", "预测"] + [f"{label.split(' ')[0]}" for label in SLEEP_STAGE_LABELS]
-        ws_cm.append(headers)
-        
-        # 标记合并单元格
-        ws_cm.merge_cells('B2:G2')
-        ws_cm['B2'].alignment = center_alignment
-        ws_cm['B2'].font = header_font
-        
-        # 添加行标题和数据
-        ws_cm.append(["真实标签", ""])
-        
-        for i, label in enumerate(SLEEP_STAGE_LABELS):
-            row = [label.split(' ')[0]] + [metrics['confusion_matrix'][i, j] for j in range(6)]
-            ws_cm.append(row)
-            
-        # 应用样式
-        for row in ws_cm.iter_rows(min_row=3, max_row=9, min_col=1, max_col=1):
-            for cell in row:
-                cell.font = header_font
-                cell.alignment = center_alignment
-                
-        for row in ws_cm.iter_rows(min_row=4, max_row=9, min_col=2, max_col=7):
-            for cell in row:
-                cell.alignment = center_alignment
-                
-        # 设置条件格式，高亮对角线(正确预测)
-        for i in range(4, 10):
-            diagonal_cell = ws_cm.cell(row=i, column=i-2)
-            diagonal_cell.fill = PatternFill(start_color="A9D08E", end_color="A9D08E", fill_type="solid")
-            
-        # 3. 样本分布工作表
-        ws_dist = wb.create_sheet("样本分布")
-        
-        # 添加标题
-        ws_dist.append(["测试数据集样本分布"])
-        ws_dist.merge_cells('A1:C1')
-        ws_dist['A1'].font = Font(bold=True, size=14)
-        ws_dist['A1'].alignment = center_alignment
-        
-        # 添加列标题
-        ws_dist.append(["睡眠阶段", "样本数量", "百分比"])
-        
-        # 添加数据
-        total_samples = len(test_data)
-        for i in range(6):
-            count = class_counts.get(i, 0)
-            percentage = (count / total_samples) * 100 if total_samples > 0 else 0
-            ws_dist.append([SLEEP_STAGE_LABELS[i], count, f"{percentage:.2f}%"])
-            
-        # 添加总计行
-        ws_dist.append(["总计", total_samples, "100.00%"])
-        
-        # 应用样式
-        for i, row in enumerate(ws_dist.iter_rows(min_row=2, max_row=9, min_col=1, max_col=3)):
-            for cell in row:
-                cell.border = border
-                if i == 0 or i == 7:  # 标题行和总计行
-                    cell.font = header_font
-                    if i == 0:
-                        cell.fill = header_fill
-                        
-                if i > 0:  # 数据行
-                    cell.alignment = Alignment(horizontal='center')
-            
-        # 4. 详细结果工作表
-        ws_detail = wb.create_sheet("详细结果")
-        
-        # 转换结果为DataFrame
-        df_results = pd.DataFrame(results)
-        
-        # 添加标题
-        ws_detail.append(["测试详细结果"])
-        ws_detail.merge_cells(f'A1:E1')
-        ws_detail['A1'].font = Font(bold=True, size=14)
-        ws_detail['A1'].alignment = center_alignment
-        
-        # 添加表头
-        headers = ["ID", "真实标签", "预测标签", "是否正确", "推理时间(秒)"]
-        ws_detail.append(headers)
-        
-        # 添加数据
-        for _, row in df_results.iterrows():
-            ws_detail.append([
-                row["id"], 
-                row["true_label"], 
-                row["prediction"], 
-                "是" if row["correct"] else "否", 
-                row["inference_time"]
-            ])
-            
-        # 应用样式
-        for cell in ws_detail[2]:
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = center_alignment
-            cell.border = border
-            
-        # 调整列宽
-        for sheet in wb.worksheets:
-            for col in sheet.columns:
-                max_length = 0
-                column = None
-                
-                # 获取列字母，跳过合并单元格
-                for cell in col:
-                    if hasattr(cell, 'column_letter'):
-                        column = cell.column_letter
-                        break
-                
-                # 如果没有找到列字母，跳过此列
-                if not column:
-                    continue
-                    
-                # 计算最大宽度
-                for cell in col:
-                    if cell.value:
-                        cell_length = len(str(cell.value))
-                        if cell_length > max_length:
-                            max_length = cell_length
-                            
-                adjusted_width = (max_length + 2) * 1.2
-                sheet.column_dimensions[column].width = adjusted_width
-        
-        # 保存Excel文件
-        wb.save(excel_path)
-        print(f"结果摘要Excel表格已保存至: {excel_path}")
-    except Exception as e:
-        print(f"保存Excel表格时出错: {e}")
-        print(traceback.format_exc())
+    # 调用函数保存结果为Excel表格
+    save_results_to_excel(results, metrics, test_data, result_dir, model_name=model_name, test_set_name=test_set_name)
 
 
 def calculate_metrics(true_labels, pred_labels, total_time):
@@ -824,7 +611,7 @@ def save_results_to_excel(results, metrics, test_data, save_dir, model_name="unk
         results: 详细的测试结果
         metrics: 性能指标
         test_data: 测试数据
-        save_dir: 保存目录
+        save_dir: 保存目录 (与混淆矩阵相同的目录)
         model_name: 模型名称
         test_set_name: 测试集名称
     """
@@ -836,7 +623,9 @@ def save_results_to_excel(results, metrics, test_data, save_dir, model_name="unk
         from openpyxl.formatting.rule import Rule
         from datetime import datetime
 
-        excel_path = os.path.join(save_dir, 'results_summary.xlsx')
+        # 直接使用传入的save_dir作为结果目录
+        # 将Excel表格保存在与混淆矩阵相同的目录下，并按模型和数据集命名
+        excel_path = os.path.join(save_dir, f'{model_name}_{test_set_name}_results.xlsx')
         
         # 创建一个Excel工作簿
         wb = Workbook()
@@ -1039,6 +828,27 @@ def save_results_to_excel(results, metrics, test_data, save_dir, model_name="unk
         # 保存Excel文件
         wb.save(excel_path)
         print(f"结果摘要Excel表格已保存至: {excel_path}")
+        
+        # 保存混淆矩阵为图片
+        try:
+            plt.figure(figsize=(10, 8))
+            cm = metrics['confusion_matrix']
+            # 使用简化的标签用于混淆矩阵
+            short_labels = ['W', 'N1', 'N2', 'N3', 'N4', 'R']
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                       xticklabels=short_labels,
+                       yticklabels=short_labels)
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.title('Sleep Stage Classification Confusion Matrix')
+            plt.tight_layout()
+            cm_path = os.path.join(save_dir, 'confusion_matrix.png')
+            plt.savefig(cm_path)
+            plt.close()
+            print(f"混淆矩阵已保存至: {cm_path}")
+        except Exception as e:
+            print(f"保存混淆矩阵图时出错: {e}")
+            
     except Exception as e:
         print(f"保存Excel表格时出错: {e}")
         print(traceback.format_exc())
@@ -1055,7 +865,7 @@ if __name__ == '__main__':
     )
     
     # 获取测试数据路径和模型名称
-    test_data_path = os.environ.get("TEST_DATA_PATH", "/data/lhc/datasets_new/sleep/test/edf197_100hz_15000ms_tok12521_test.json")
+    test_data_path = os.environ.get("TEST_DATA_PATH", "/data/lhc/datasets_new/sleep/test/balanced/edf10_200hz_7500ms_tok12588_balanced_0.8_sqrt_inverse_test.json")
     test_data = load_test_data(test_data_path)
     
     # 从测试数据路径中提取测试集名称，并去掉数据量信息

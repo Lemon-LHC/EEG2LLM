@@ -1,0 +1,22 @@
+# 忽略Python缓存文件
+__pycache__/
+*.py[cod]
+*.class
+
+# 忽略日志和缓存
+*.log
+cache/
+saves/
+*.bak
+
+# 忽略大型数据文件
+*.pkl
+*.h5
+*.dat
+*.bin
+
+# 忽略临时文件
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.DS_Store

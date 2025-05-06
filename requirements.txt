@@ -1,0 +1,41 @@
+# 基础数据处理库
+numpy==1.26.4
+scipy==1.15.2
+pandas==2.2.3
+
+# 科学计算和机器学习
+scikit-learn==1.6.1
+
+# 深度学习框架
+tensorflow==2.19.0
+
+# 脑电数据处理
+mne==1.9.0
+pyEDFlib==0.1.40
+
+
+git+https://github.com/forrestbao/pyeeg.git
+
+# 进度显示
+tqdm==4.67.1
+
+# 数据可视化
+matplotlib==3.10.1
+seaborn==0.13.2
+
+# Excel处理
+openpyxl==3.1.5
+
+# 文件处理
+h5py==3.13.0
+
+# 并行处理
+joblib==1.4.2
+
+# 信号处理
+librosa==0.11.0
+PyWavelets==1.8.0
+soundfile==0.13.1
+
+# 辅助工具
+psutil==7.0.0 

@@ -8,8 +8,8 @@ SCRIPT_DIR="/data/lhc/projects/EEG2LLM"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
 MODEL_NAME="/data/lhc/models/Qwen/Qwen3-0.6B"
 DATASET_DIR="/data/lhc/datasets_new/emotion"
-TRAIN_DATASET="train/sleep_st_44_100hz_eeg15s-step15s_emo2.0s-step1s_win_all_tok13101_bal0.5_sqrt_inverse_202504272332_train"  # 完整的相对路径
-TEST_DATASET="test/sleep_st_44_100hz_eeg15s-step15s_emo2.0s-step1s_win_all_tok13101_bal0.5_sqrt_inverse_202504272332_test"     # 完整的相对路径
+TRAIN_DATASET="train/sleep_st_1_100hz_eeg15s-step15s_emo2.0s-step1s_win10_tok13112_bal0.2_sqrt_inverse_202504291924_train"  # 完整的相对路径
+TEST_DATASET="train/sleep_st_1_100hz_eeg15s-step15s_emo2.0s-step1s_win10_tok13112_bal0.2_sqrt_inverse_202504291924_train"     # 完整的相对路径
 
 # 创建输出目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -67,11 +67,11 @@ python "${TRAIN_SCRIPT}" \
   --num_epochs 3 \
   --learning_rate 5e-05 \
   --train_batch_size 1 \
-  --grad_accum_steps 4 \
-  --lora_rank 8 \
-  --save_steps 5000 \
-  --cutoff_len 13500 \
-  --test_interval 5000 2>&1 | tee "${LOG_FILE}"
+  --grad_accum_steps 8 \
+  --lora_rank 4 \
+  --save_steps 10000 \
+  --cutoff_len 12500 \
+  --test_interval 10000 2>&1 | tee "${LOG_FILE}"
 
 EXITCODE=${PIPESTATUS[0]}  # 获取python命令的退出码，而不是tee的退出码
 if [ $EXITCODE -eq 0 ]; then

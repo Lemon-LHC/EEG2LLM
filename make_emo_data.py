@@ -2794,7 +2794,7 @@ def main():
         'n_jobs': 44,    # 确认调试时使用 n_jobs=1
         'target_sfreq': 100,
         'balance_strategy': 'balanced', #'none',
-        'balance_alpha': 0.8,
+        'balance_alpha': 0.5,
         'weight_method': 'sqrt_inverse',
         'file_pattern': None,
         'file_type': 'st',
@@ -2810,9 +2810,9 @@ def main():
         # --- 结束修改 ---
         'timeout': 300000,
         'normalize_features': True,
-        'eeg_window_sec': 15.0,
+        'eeg_window_sec': 10.0,
         # --- 新增：EEG 窗口滑动步长参数 ---
-        'eeg_step_sec': 15.0, # 默认步长等于窗口长度 (无重叠)
+        'eeg_step_sec': 10.0, # 默认步长等于窗口长度 (无重叠)
         # --- 结束新增 ---
     }
 

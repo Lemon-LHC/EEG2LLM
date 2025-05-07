@@ -1035,7 +1035,6 @@ def train_model(args, directories, gpu_count):
         "--trust_remote_code", "True",
         "--ddp_timeout", "180000000",
         "--include_num_input_tokens_seen", "True",
-        "--optim", "adamw_torch",
         "--lora_rank", str(args.lora_rank),
         "--lora_alpha", str(args.lora_alpha),
         "--lora_dropout", str(args.lora_dropout),
@@ -1043,7 +1042,8 @@ def train_model(args, directories, gpu_count):
         "--eval_strategy", "steps",
         "--eval_steps", str(args.test_interval),
         "--per_device_eval_batch_size", str(args.train_batch_size),
-        "--gradient_checkpointing", "True",
+        "--gradient_accumulation_steps", str(args.grad_accum_steps),
+        "--deepspeed", "ds_config_zero2.json",
         "--ddp_find_unused_parameters", "False",
         "--overwrite_output_dir", "True",
         "--template", "alpaca"

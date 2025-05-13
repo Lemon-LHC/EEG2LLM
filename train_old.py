@@ -111,6 +111,8 @@ def parse_arguments():
     # 添加 tensorboard 相关参数
     parser.add_argument("--tensorboard_dir", type=str, default=None,
                        help="TensorBoard日志目录")
+    parser.add_argument("--use_deepspeed", type=str, default="true", choices=["true", "false"],
+                        help="是否使用DeepSpeed进行训练 (true/false)")
     
     args = parser.parse_args()
     return args
@@ -1043,12 +1045,18 @@ def train_model(args, directories, gpu_count):
         "--eval_steps", str(args.test_interval),
         "--per_device_eval_batch_size", str(args.train_batch_size),
         "--gradient_accumulation_steps", str(args.grad_accum_steps),
-        "--deepspeed", "ds_config_zero2.json",
         "--ddp_find_unused_parameters", "False",
         "--overwrite_output_dir", "True",
         "--template", "alpaca"
     ]
     
+    # 根据 args.use_deepspeed 条件性添加deepspeed参数
+    if args.use_deepspeed.lower() == "true":
+        cmd.extend(["--deepspeed", "ds_config_zero2.json"])
+        print("DeepSpeed is ENABLED.")
+    else:
+        print("DeepSpeed is DISABLED.")
+
     print(f"\n训练命令: {' '.join(cmd)}")
     print("\n开始训练...")
     
@@ -1164,22 +1172,6 @@ def train_model(args, directories, gpu_count):
         )
     
     print(f"\n训练完成! 总训练时间: {int(hours)}小时 {int(minutes)}分钟 {int(seconds)}秒")
-    
-    # 在训练循环中记录指标
-    for epoch in range(int(args.num_epochs)):
-        # ... 训练代码 ...
-        if args.tensorboard_dir:
-            writer.add_scalar('Loss/train', train_loss, global_step)
-            writer.add_scalar('Accuracy/train', train_accuracy, global_step)
-            
-        # 验证阶段
-        if args.tensorboard_dir:
-            writer.add_scalar('Loss/eval', eval_loss, global_step)
-            writer.add_scalar('Accuracy/eval', eval_accuracy, global_step)
-    
-    # 关闭 writer
-    if args.tensorboard_dir:
-        writer.close()
     
     return True  # 返回成功状态
 

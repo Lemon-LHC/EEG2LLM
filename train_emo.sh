@@ -8,8 +8,11 @@ SCRIPT_DIR="/data/lhc/projects/EEG2LLM"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
 MODEL_NAME="/data/lhc/models/Qwen/Qwen3-0.6B"
 DATASET_DIR="/data/lhc/datasets_new/emotion"
-TRAIN_DATASET="train/sleep_st_1_100hz_eeg15s-step15s_emo2.0s-step1s_win10_tok13112_bal0.2_sqrt_inverse_202504291924_train"  # 完整的相对路径
-TEST_DATASET="train/sleep_st_1_100hz_eeg15s-step15s_emo2.0s-step1s_win10_tok13112_bal0.2_sqrt_inverse_202504291924_train"     # 完整的相对路径
+TRAIN_DATASET="train/sleep_st_44_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok9689_bal0.5_sqrt_inverse_202505130318_train"  # 完整的相对路径
+TEST_DATASET="test/sleep_st_44_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok9689_bal0.5_sqrt_inverse_202505130318_test"     # 完整的相对路径
+
+# 新增：设置是否使用 DeepSpeed，"true" 或 "false"
+USE_DEEPSPEED="false"
 
 # 创建输出目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -26,7 +29,7 @@ EXPORT_DIR="/data/lhc/models_new/${MODEL_SHORT_NAME}_${DATASET_INFO}"
 # echo "激活LLaMA-Factory虚拟环境..."
 # 根据您的环境配置修改下面的路径和名称
 # Anaconda环境
-# source /home/lhc/anaconda3/bin/activate llama_factory
+source /home/lhc/anaconda3/bin/activate llama_factory
 # 或者其他虚拟环境
 # source /path/to/your/venv/bin/activate
 
@@ -70,7 +73,8 @@ python "${TRAIN_SCRIPT}" \
   --grad_accum_steps 8 \
   --lora_rank 4 \
   --save_steps 10000 \
-  --cutoff_len 12500 \
+  --use_deepspeed ${USE_DEEPSPEED} \
+  --cutoff_len 9800 \
   --test_interval 10000 2>&1 | tee "${LOG_FILE}"
 
 EXITCODE=${PIPESTATUS[0]}  # 获取python命令的退出码，而不是tee的退出码

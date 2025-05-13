@@ -6,7 +6,7 @@ conda activate llama_factory
 cd /data/lhc/projects/LLaMA-Factory
 # 运行API服务
 API_PORT=8001 llamafactory-cli api \
-    --model_name_or_path "/data/lhc/models_new/Llama-3.2-1B-Instruct_sleep_st_44_100hz_eeg15s-step15s_emo2.0s-step1s_win_all_tok13101_bal0.2_sqrt_inverse_202504292208_train/final_20250501_092554" \
+    --model_name_or_path "/data/lhc/models_new/Qwen3-0.6B_sleep_st_44_100hz_eeg10s-step10s_emo2.0s-step0.5s_win_all_tok9314_bal0.5_sqrt_inverse_202505071543_train/final_20250508_073419" \
     --template llama3 \
     --infer_backend vllm \
     --trust_remote_code \

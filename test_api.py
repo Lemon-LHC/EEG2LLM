@@ -1127,7 +1127,7 @@ if __name__ == '__main__':
     )
     
     # 获取测试数据路径和模型名称
-    default_test_path = "/data/lhc/datasets_new/emotion/test/sleep_st_44_100hz_eeg15s-step15s_emo2.0s-step1s_win_all_tok13101_bal0.2_sqrt_inverse_202504292208_test.json"
+    default_test_path = "/data/lhc/datasets_new/emotion/test/sleep_st_1_100hz_eeg10s-step10s_emo2.0s-step0.5s_win5_tokenizer_qwen_tok12330_bal0.5_sqrt_inverse_202505122158_test.json"
     test_data_path = os.environ.get("TEST_DATA_PATH", default_test_path)
 
     # 添加文件存在性检查

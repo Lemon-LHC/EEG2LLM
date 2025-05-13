@@ -30,6 +30,7 @@ from sklearn.preprocessing import StandardScaler
 import datetime
 import openpyxl
 import scipy.signal
+import logging # 添加 logging 模块
 
 # 提前导入TensorFlow相关库，并处理异常
 tensorflow_available = False
@@ -198,78 +199,99 @@ window_length_ms = 15000
 filter_windows = False  # 默认不过滤窗口，改为False
 add_noise = False  # 默认不添加噪声，这里修改默认值
 
-# 加载分词器
-tokenizer_path = "/data/lhc/models/Llama-3.2-1B-Instruct"
-tokenizer = None  
+# --- 修改：确保全局 tokenizer 初始化 ---
+tokenizer_path = None  # 由main动态设置
+tokenizer = None       # 确保这行存在并初始化
+# --- 结束修改 ---
 
 # 安全获取tokenizer的函数
 def get_tokenizer():
     """安全地获取tokenizer，如果加载失败则返回None"""
-    global tokenizer
-    if tokenizer is None:
+    global tokenizer  # 声明使用全局变量
+    global tokenizer_path
+    
+    # 只有在 tokenizer 尚未加载时才尝试加载
+    if tokenizer is None: 
+        if tokenizer_path is None:
+            safe_print("错误: tokenizer_path 未设置。请确保在 main 函数中已通过命令行参数或默认值设置。")
+            return None # 路径未设置，无法加载
+        
+        safe_print(f"尝试加载tokenizer: {tokenizer_path} ...") # 添加加载日志
         try:
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-            print(f"已成功加载tokenizer: {tokenizer_path}")
-        except Exception as e:
-            print(f"加载tokenizer失败: {e}")
+            # 加载模型并直接赋值给全局 tokenizer
+            # 增加超时设置，例如 60 秒
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True) 
+            safe_print(f"已成功加载tokenizer: {tokenizer_path}")
+        except ImportError as ie:
+             safe_print(f"加载 tokenizer 依赖缺失: {ie}")
+             tokenizer = None
+             return None
+        except OSError as oe:
+            safe_print(f"加载 tokenizer 时文件或路径错误 (OSError): {oe}")
+            tokenizer = None
             return None
+        except Exception as e:
+            safe_print(f"加载tokenizer时发生未知错误: {e}")
+            import traceback
+            safe_print(traceback.format_exc()) # 打印详细堆栈信息
+            # 即使失败，也要将全局 tokenizer 显式设为 None，避免后续状态不确定
+            tokenizer = None 
+            return None # 返回 None 表示加载失败
+            
+    # 如果 tokenizer 已经加载过（在这次调用之前或在 try块中成功加载）
+    # 或者在 try 块中加载失败（此时 tokenizer 会是 None），
+    # 都返回当前的全局 tokenizer 状态。
     return tokenizer
 
 # 安全计算token长度
-def safe_calculate_token_length(text):
-    """安全地计算文本的token长度，失败时返回估计值"""
-    tk = get_tokenizer()
-    if tk is not None:
+def safe_calculate_token_length(text, tk_instance):
+    """安全地计算文本的token长度，使用传入的tokenizer实例，失败时返回估计值"""
+    # 注意：这个函数现在接收一个 tk_instance 参数
+    if tk_instance is not None:
         try:
-            return len(tk.encode(text))
+            return len(tk_instance.encode(text))
         except Exception as e:
-            print(f"计算token长度时出错: {e}")
+            safe_print(f"使用 tokenizer 计算 token 长度时出错: {e}")
     # 如果tokenizer不可用或出错，使用简单估算（每个字符约1.5个token）
-    return int(len(text) * 1.5)
+    estimate_factor = 1.5 
+    estimated_len = int(len(text) * estimate_factor)
+    # safe_print(f"估算 token 长度: {estimated_len} (原文长度 {len(text)})") # 可选调试日志
+    return estimated_len
 
 def calculate_tokens(sample):
     """计算样本的token数量"""
-    try:
-        # 构建完整提示
-        system = sample.get('system', '')
-        instruction = sample.get('instruction', '')
-        input_text = sample.get('input', '')
+    # --- 修改：始终调用 get_tokenizer 获取最新的全局状态 ---
+    tk = get_tokenizer() 
+    # --- 结束修改 ---
+    
+    system_text = sample.get('system', '')
+    instruction_text = sample.get('instruction', '')
+    input_text = sample.get('input', '')
+    
+    # --- 修改：统一调用 safe_calculate_token_length ---
+    instruction_token_count = safe_calculate_token_length(instruction_text, tk)
+    input_token_count = safe_calculate_token_length(input_text, tk)
+    
+    if system_text:
+        # 如果需要计算包含 system 的总长度，也使用安全函数
+        combined_text_with_system = system_text + "\n" + instruction_text + "\n" + input_text
+        total_token_count = safe_calculate_token_length(combined_text_with_system, tk)
+    else:
+        # 否则，基于 instruction 和 input 计算总长度
+        combined_text = instruction_text + "\n" + input_text
+        total_token_count = safe_calculate_token_length(combined_text, tk)
         
-        # 获取tokenizer
-        tk = get_tokenizer()
-        if tk is None:
-            # 如果tokenizer不可用，使用估算值
-            instruction_token_count = safe_calculate_token_length(instruction)
-            input_token_count = safe_calculate_token_length(input_text)
-            if system:
-                total_token_count = safe_calculate_token_length(system + "\n" + instruction + "\n" + input_text)
-            else:
-                total_token_count = safe_calculate_token_length(instruction + "\n" + input_text)
-        else:
-            # 计算指令部分的token数量
-            instruction_token_count = len(tk.encode(instruction))
-            # 计算输入部分的token数量
-            input_token_count = len(tk.encode(input_text))
-            # 构建完整prompt
-            if system:
-                prompt_text = system + "\n" + instruction + "\n" + input_text
-            else:
-                prompt_text = instruction + "\n" + input_text
-            total_token_count = len(tk.encode(prompt_text))
-            
-        return {
-            "instruction_tokens": instruction_token_count,
-            "input_tokens": input_token_count,
-            "total_tokens": total_token_count
-        }
-    except Exception as e:
-        print(f"计算token数量时出错: {str(e)}")
-        # 出错时返回默认值
-        return {
-            "instruction_tokens": 1000,
-            "input_tokens": 2000,
-            "total_tokens": 3000
-        }
+    # 如果 tk 为 None，打印一次警告
+    if tk is None:
+         # safe_print("警告: Tokenizer 不可用，返回的 Token 数量是估算值。") # 减少重复打印
+         pass # 警告已在 safe_calculate_token_length 内部处理 (如果需要)
+
+    return {
+        "instruction_tokens": instruction_token_count,
+        "input_tokens": input_token_count,
+        "total_tokens": total_token_count
+    }
+    # --- 结束修改 ---
 
 # 添加线程锁，用于保护共享资源
 print_lock = threading.Lock()
@@ -1188,16 +1210,22 @@ def process_directory(
     timeout,
     normalize_features,
     eeg_window_sec=15.0,
-    eeg_step_sec=15.0, # <<<--- 新增参数
-    resolve_emotion_conflict=False
+    eeg_step_sec=15.0,
+    resolve_emotion_conflict=False,
+    tokenizer_name="unknown"  # 新增参数
     ):
     """处理目录中的EDF文件，聚合数据，分割，平衡，并按指定格式保存。
 
     Args:
         # ... 其他参数 ...
         eeg_step_sec (float): EEG 窗口滑动的步长 (秒).
+        tokenizer_name (str): 使用的分词器名称 (例如 'qwen', 'llama')，用于文件名。
         # ... 其他参数 ...
     """
+    # <<< 新增调试打印 >>>
+    safe_print(f"[Debug ProcDir] Received tokenizer_name parameter: {tokenizer_name}")
+    # <<< 结束新增 >>>
+
     # --- 增加日志：记录 eeg_step_sec ---
     safe_print("\n--- Entering process_directory ---")
     safe_print(f"Parameters received:")
@@ -1407,59 +1435,41 @@ def process_directory(
 
     max_windows_str = f"win{max_windows}" if max_windows is not None and max_windows > 0 else "win_all"
 
-    # --- 修改：在 filename_prefix 中添加 eeg_step_str ---
-    filename_prefix = f"sleep_{file_type.lower()}_{actual_max_files}_{target_sfreq}hz"
-    filename_prefix += f"_eeg{eeg_window_str}s-step{eeg_step_str}s" # <<<--- 修改此处格式
-    if include_emotion:
-        filename_prefix += f"_emo{emotion_window_length}s-step{emotion_step_str}s" # 可选：更明确情绪参数
-    filename_prefix += f"_{max_windows_str}_tok{avg_tokens}"
-    # --- 结束修改 ---
+    # --- 新增：格式化分词器名称字符串 ---
+    safe_tokenizer_name = re.sub(r'[\\/*?:"<>|]', '_', tokenizer_name)
+    tokenizer_str = f"tokenizer_{safe_tokenizer_name}"
+    # <<< 新增调试打印 >>>
+    safe_print(f"[Debug ProcDir] Constructed tokenizer_str for filename: {tokenizer_str}")
+    # <<< 结束新增 >>>
+    # --- 结束新增 ---
 
+    # --- 修改：在 filename_prefix 中添加 eeg_step_str 和 tokenizer_str ---
+    filename_prefix = f"sleep_{file_type.lower()}_{actual_max_files}_{target_sfreq}hz"
+    filename_prefix += f"_eeg{eeg_window_str}s-step{eeg_step_str}s"
+    if include_emotion:
+        filename_prefix += f"_emo{emotion_window_length}s-step{emotion_step_str}s"
+    filename_prefix += f"_{max_windows_str}"
+    filename_prefix += f"_{tokenizer_str}"
+    filename_prefix += f"_tok{avg_tokens}"
     if balance_strategy != "original" and balance_strategy != "none":
         filename_prefix += f"_bal{balance_alpha}_{weight_method}"
-
     base_filename_part = filename_prefix
     final_filename_prefix = f"{base_filename_part}_{timestamp}"
-
     train_filename = f"{final_filename_prefix}_train.json"
     test_filename = f"{final_filename_prefix}_test.json"
     stats_excel_filename = f"{final_filename_prefix}_stats.xlsx"
     stats_json_filename = f"{final_filename_prefix}_stats.json"
     # --- 结束文件名生成修改 ---
-
-    # --- 保存训练集和测试集 ---
-    def save_dataset(data, filename, output_directory):
-        output_path = os.path.join(output_directory, filename)
-        try:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            safe_print(f"成功保存 {len(data)} 个样本到: {output_path}")
-        except Exception as e:
-            safe_print(f"保存文件 {output_path} 时出错: {e}")
-
-    safe_print("保存处理后的数据集...")
-    save_dataset(balanced_train_data, train_filename, train_output_dir)
-    save_dataset(raw_test_data, test_filename, test_output_dir)
-
-    # --- 统计最终阶段分布 ---
-    safe_print("计算最终阶段统计...")
-    final_train_counts = count_stages(balanced_train_data)
-    final_test_counts = count_stages(raw_test_data)
-    # 原始总数统计在前面聚合时已经完成 (total_stage_counts)
-    original_total_samples = sum(total_stage_counts.values())
-
-    # 打印统计信息
-    print_stage_statistics(all_aggregated_samples, balanced_train_data, raw_test_data, processed_file_types)
-
-    # --- 准备并保存统计信息 (在 params 中添加 eeg_step_sec) ---
+    
+    # --- 保存统计信息时加入tokenizer_path和tokenizer_name ---
     dataset_info = {
         "dataset_name": final_filename_prefix,
-        "original_total_samples": original_total_samples,
+        "original_total_samples": sum(total_stage_counts.values()),
         "train_samples": len(balanced_train_data),
         "test_samples": len(raw_test_data),
         "original_stage_counts": dict(total_stage_counts),
-        "train_stage_counts": final_train_counts,
-        "test_stage_counts": final_test_counts,
+        "train_stage_counts": count_stages(balanced_train_data),
+        "test_stage_counts": count_stages(raw_test_data),
         "processed_files_count": processed_file_count,
         "failed_files_count": failed_file_count,
         "processed_file_types": processed_file_types,
@@ -1483,7 +1493,9 @@ def process_directory(
             "timestamp": timestamp,
             "file_type_filter": file_type,
             "file_pattern_filter": file_pattern,
-            "timeout": timeout # 添加 timeout 到 params
+            "timeout": timeout, # 添加 timeout 到 params
+            "tokenizer_path": tokenizer_path,
+            "tokenizer_name": tokenizer_name,
         }
     }
 
@@ -1498,6 +1510,32 @@ def process_directory(
     safe_print(f"处理成功文件数: {dataset_info.get('processed_files_count', 0)}")
     safe_print(f"处理失败文件数: {dataset_info.get('failed_files_count', 0)}")
     safe_print("--- END DEBUG ---\n")
+
+    # --- 开始：重新加入的代码 ---
+    # --- 保存训练集和测试集 ---
+    def save_dataset(data, filename, output_directory):
+        output_path = os.path.join(output_directory, filename)
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            safe_print(f"成功保存 {len(data)} 个样本到: {output_path}")
+        except Exception as e:
+            safe_print(f"保存文件 {output_path} 时出错: {e}")
+
+    safe_print("保存处理后的数据集...")
+    save_dataset(balanced_train_data, train_filename, train_output_dir)
+    save_dataset(raw_test_data, test_filename, test_output_dir)
+
+    # --- 统计最终阶段分布 ---
+    safe_print("计算最终阶段统计...")
+    final_train_counts = count_stages(balanced_train_data)
+    final_test_counts = count_stages(raw_test_data)
+    # 原始总数统计在前面聚合时已经完成 (total_stage_counts)
+    original_total_samples = sum(total_stage_counts.values())
+
+    # 打印统计信息
+    print_stage_statistics(all_aggregated_samples, balanced_train_data, raw_test_data, processed_file_types)
+    # --- 结束：重新加入的代码 ---
 
     # 保存统计到 Excel
     excel_path = os.path.join(all_output_dir, stats_excel_filename)
@@ -2801,7 +2839,7 @@ def main():
         'include_emotion': True,
         'emotion_model_dir': '/data/lhc/models/emotion',
         'emotion_window_length': 2.0,
-        'emotion_step_size': 0.5,
+        'emotion_step_size': 0.25,
         'resolve_emotion_conflict': False,
         'device': 'cpu',
         'add_noise': False,
@@ -2810,10 +2848,11 @@ def main():
         # --- 结束修改 ---
         'timeout': 300000,
         'normalize_features': True,
-        'eeg_window_sec': 10.0,
+        'eeg_window_sec': 7.5,
         # --- 新增：EEG 窗口滑动步长参数 ---
-        'eeg_step_sec': 10.0, # 默认步长等于窗口长度 (无重叠)
+        'eeg_step_sec': 7.5, # 默认步长等于窗口长度 (无重叠)
         # --- 结束新增 ---
+        'tokenizer_path': "/data/lhc/models/Qwen/Qwen3-0.6B",  # 由main动态设置
     }
 
     # --- 定义固定的输出目录 ---
@@ -2840,15 +2879,20 @@ def main():
 
     args = parser.parse_args()
 
-    # --- 将解析后的参数更新回字典 (会自动包含新增的 eeg_step_sec) ---
+    # --- 修改：简化 parsed_params 的填充逻辑 ---
     parsed_params = {}
     for param in param_mapping.keys():
-        value = getattr(args, param, param_mapping[param])
-        if isinstance(param_mapping[param], bool):
-             parsed_params[param] = value if value is not None else param_mapping[param]
-        else:
-            parsed_params[param] = value
+        # 直接从解析后的 args 对象获取值，argparse 会处理默认值
+        value = getattr(args, param)
+        parsed_params[param] = value
+    # --- 结束修改 ---
 
+    # --- 更新全局 tokenizer_path ---
+    global tokenizer_path # 声明我们要修改全局变量
+    # 现在可以安全地访问，因为上面的循环保证了 key 的存在
+    tokenizer_path = parsed_params['tokenizer_path']
+    safe_print(f"Tokenizer path set to: {tokenizer_path} (from command line or default)")
+    # --- 结束更新全局 tokenizer_path ---
 
     # --- 强制 n_jobs=1 进行调试 (可选) ---
     # parsed_params['n_jobs'] = 1
@@ -2864,16 +2908,73 @@ def main():
         safe_print(f"使用指定的 n_jobs: {parsed_params['n_jobs']}")
 
 
-    # --- 调用核心处理函数 (使用字典解包传递所有参数，包括新增的 eeg_step_sec) ---
+    # --- 调用核心处理函数 ---
     safe_print("开始处理目录...")
+    # --- 修改：在解包前移除不被 process_directory 接受的 tokenizer_path 参数 ---
+    parsed_params.pop('tokenizer_path', None) # 移除 tokenizer_path，因为它通过全局变量访问
+    # --- 结束修改 ---
     process_directory(
         output_dirs=output_dirs,
-        **parsed_params # 使用字典解包传递所有参数
+        **parsed_params # 现在 parsed_params 不包含 tokenizer_path 了
     )
 
     end_time = time.time()
     safe_print(f"总处理时间: {end_time - start_time:.2f} 秒")
     safe_print("[Debug] Exiting main function.")
+
+    # --- 新增：尝试在主进程预加载 Tokenizer ---
+    safe_print("尝试在主进程预加载 Tokenizer...")
+    if get_tokenizer() is None:
+        safe_print("警告: Tokenizer 预加载失败。Token 计算将使用估计值。请检查 tokenizer_path 是否有效以及相关依赖是否安装。")
+        # exit(1) # 如果必须成功，则退出
+    else:
+        safe_print("Tokenizer 预加载成功。")
+    # --- 结束预加载 ---
+
+    # --- 新增：根据 tokenizer_path 确定 tokenizer_name ---
+    tokenizer_name = "unknown" # 默认名称
+    if tokenizer_path:
+        path_lower = tokenizer_path.lower()
+        if '/qwen/' in path_lower or 'qwen3-0.6b' in path_lower:
+            tokenizer_name = "qwen"
+        elif 'llama-3.2-1b-instruct' in path_lower:
+            tokenizer_name = "llama"
+        else:
+            try:
+                basename = os.path.basename(tokenizer_path)
+                if basename:
+                    # 进一步清理可能的无效名称
+                    if basename.lower() != 'tokenizer.json':
+                        tokenizer_name = basename
+                    else: # 如果只剩下 tokenizer.json，尝试获取父目录名
+                        parent_dir = os.path.dirname(tokenizer_path)
+                        parent_basename = os.path.basename(parent_dir)
+                        if parent_basename:
+                            tokenizer_name = parent_basename
+            except Exception:
+                pass
+    parsed_params['tokenizer_name'] = tokenizer_name # 将名称添加到参数字典中
+    safe_print(f"Determined tokenizer name: {tokenizer_name}")
+    # --- 结束确定 tokenizer_name ---
+
+    # --- 结束 tokenizer_name 推断 ---
+    # <<< 新增调试打印 >>>
+    safe_print(f"[Debug Main] Tokenizer name determined and added to params: {parsed_params.get('tokenizer_name')}")
+    # <<< 结束新增 >>>
+
+    # ... (设置 n_jobs 的逻辑不变) ...
+    process_params = parsed_params.copy()
+    process_params.pop('tokenizer_path', None) 
+
+    # <<< 新增调试打印 >>>
+    safe_print(f"[Debug Main] Parameters being passed to process_directory: {process_params}")
+    # <<< 结束新增 >>>
+
+    # process_directory 现在接收 tokenizer_name
+    process_directory(
+        output_dirs=output_dirs,
+        **process_params # 现在 process_params 不包含 tokenizer_path 了
+    )
 
 if __name__ == "__main__":
     # 确保在Windows或macOS上使用多进程时，这是入口点

@@ -12,6 +12,7 @@ from openai import OpenAI
 from transformers.utils.versions import require_version
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import re
+import argparse
 
 require_version("openai>=1.5.0", "To fix: pip install openai>=1.5.0")
 
@@ -64,7 +65,7 @@ def get_api_prediction(client, messages, max_retries=5, retry_delay=2, max_token
                 model="test",
                 temperature=0.1,
                 max_tokens=max_tokens,
-                timeout=30  # 设置超时时间为30秒
+                timeout=600  # 进一步增加超时时间到600秒
             )
             end_time = time.time()
 
@@ -93,7 +94,7 @@ def get_api_prediction(client, messages, max_retries=5, retry_delay=2, max_token
 
 
 def evaluate_model(client, test_data, print_interval=10, save_interval=500, save_dir='/data/lhc/results',
-                model_name="unknown_model", test_set_name="unknown_dataset", max_tokens=60000):
+                model_name="unknown_model", test_set_name="unknown_dataset", max_tokens=60000, args=None):
     """评估模型性能
     (修改版：使用 system, instruction, input 构建 messages)
 
@@ -106,22 +107,22 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
         model_name: 模型名称
         test_set_name: 测试集名称
         max_tokens: API 请求的最大 token 数
+        args: 命令行参数对象 (用于访问 save_detailed_results)
     """
     # 创建一个包含模型名称和测试集名称的文件夹来保存结果
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_dir = os.path.join(save_dir, f"{model_name}_{test_set_name}_{timestamp}")
+    result_dir = os.path.join(save_dir, f"{model_name}_{test_set_name}")
     os.makedirs(result_dir, exist_ok=True)
 
     # 保存中间结果的函数
-    def save_intermediate_results(current_idx, current_metrics, current_results):
+    def save_intermediate_results(current_idx, current_metrics, current_results, save_detailed_flag):
         """保存中间结果
-           (需要更新以匹配新的 metrics 结构)
+           (修改版：直接保存到 result_dir, 文件名包含 _intermediate_testsetname, 根据标志保存详细列表)
         """
-        intermediate_dir = os.path.join(result_dir, f"intermediate_{current_idx}")
-        os.makedirs(intermediate_dir, exist_ok=True)
+        base_save_dir = result_dir # 直接使用主结果目录
 
-        # 保存模型和测试集信息 (使用 metrics 中的信息)
-        with open(os.path.join(intermediate_dir, "info.json"), "w") as f:
+        # 保存模型和测试集信息
+        info_filename = f"info_intermediate_{test_set_name}.json"
+        with open(os.path.join(base_save_dir, info_filename), "w") as f:
             json.dump({
                 "model_name": model_name,
                 "test_set_name": test_set_name,
@@ -131,15 +132,21 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }, f, indent=4)
 
-        # 保存指标 (确保 NumPy 数组能被 JSON 序列化)
-        with open(os.path.join(intermediate_dir, "metrics.json"), "w", encoding='utf-8') as f:
+        # 保存指标
+        metrics_filename = f"metrics_intermediate_{test_set_name}.json"
+        with open(os.path.join(base_save_dir, metrics_filename), "w", encoding='utf-8') as f:
             serializable_metrics = {k: v.tolist() if isinstance(v, np.ndarray) else v
                                      for k, v in current_metrics.items()}
             json.dump(serializable_metrics, f, indent=4, ensure_ascii=False)
 
-        # 保存详细结果列表
-        with open(os.path.join(intermediate_dir, "results.json"), "w", encoding='utf-8') as f:
-            json.dump(current_results, f, indent=4, ensure_ascii=False)
+        # 保存详细结果列表 (根据标志)
+        if save_detailed_flag:
+            results_list_filename = f"results_list_intermediate_{test_set_name}.json"
+            with open(os.path.join(base_save_dir, results_list_filename), "w", encoding='utf-8') as f:
+                json.dump(current_results, f, indent=4, ensure_ascii=False)
+            print(f"Intermediate detailed results list saved to: {os.path.join(base_save_dir, results_list_filename)}")
+        else:
+            print("Skipping saving intermediate detailed results list as per configuration.")
 
         # 保存混淆矩阵图
         if 'confusion_matrix' in current_metrics and current_metrics['confusion_matrix'] is not None:
@@ -153,8 +160,9 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
                                  yticklabels=cm_labels)
                      plt.xlabel('Predicted Label')
                      plt.ylabel('True Label')
-                     plt.title(f'Intermediate Confusion Matrix (Samples Processed: {current_idx})')
-                     plt.savefig(os.path.join(intermediate_dir, "confusion_matrix.png"))
+                     plt.title(f'Intermediate Confusion Matrix ({test_set_name} - Samples: {current_idx})')
+                     cm_filename = f"confusion_matrix_intermediate_{test_set_name}.png"
+                     plt.savefig(os.path.join(base_save_dir, cm_filename))
                      plt.close()
                  except Exception as plot_err:
                      print(f"警告：绘制中间混淆矩阵图时出错: {plot_err}")
@@ -164,10 +172,10 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
         else:
              print("警告：中间指标中缺少混淆矩阵，跳过绘图。")
 
-        # 保存Excel文件 (需要更新以处理新 metrics)
-        save_results_to_excel(current_results, current_metrics, current_results, intermediate_dir, model_name, test_set_name)
+        # 保存Excel文件
+        save_results_to_excel(current_results, current_metrics, base_save_dir, model_name, test_set_name, is_intermediate=True, save_detailed_flag=save_detailed_flag)
 
-        print(f"\n中间结果已保存至: {intermediate_dir}")
+        print(f"\n中间结果已保存至: {base_save_dir} (文件带有 _intermediate_{test_set_name} 标识)")
 
     print("开始评估模型性能...")
     results = []
@@ -320,8 +328,8 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
             if (idx + 1) % save_interval == 0:
                 # 计算用于保存的中间指标
                 intermediate_metrics = calculate_metrics(true_labels, pred_labels, total_time)
-                # 传递计算出的指标和当前的详细结果列表
-                save_intermediate_results(idx + 1, intermediate_metrics, results)
+                # 传递计算出的指标和当前的详细结果列表，以及保存详细结果的标志
+                save_intermediate_results(idx + 1, intermediate_metrics, results, args.save_detailed_results if args else False)
 
         except Exception as e:
             error_msg = f"处理样本 {idx} 时发生意外错误: {str(e)}"
@@ -394,7 +402,7 @@ def evaluate_model(client, test_data, print_interval=10, save_interval=500, save
     print("=" * 50)
 
     # 保存结果到指定目录 (使用最终的 metrics 和 results)
-    save_results(results, final_metrics, test_data, result_dir, model_name=model_name, test_set_name=test_set_name)
+    save_results(results, final_metrics, test_data, result_dir, args.save_dir, model_name, test_set_name, args.save_detailed_results if args else False)
 
     return final_metrics
 
@@ -518,11 +526,11 @@ def calculate_metrics(true_labels, pred_labels, total_time):
     }
 
 
-def save_results(results, metrics, test_data, result_dir, model_name="unknown_model", test_set_name="unknown_dataset"):
-    """保存测试结果到指定目录 (特定运行的子目录)
-       (更新版：使用新的 metrics 结构)
+def save_results(results, metrics, test_data, result_dir, top_level_save_dir, model_name="unknown_model", test_set_name="unknown_dataset", save_detailed_flag=False):
+    """保存测试结果到指定目录
+       (更新版：文件名包含 _final_testsetname, 根据标志保存详细列表, 总表保存到顶层目录)
     """
-    os.makedirs(result_dir, exist_ok=True)
+    os.makedirs(result_dir, exist_ok=True) # result_dir is the sub-folder like model_testset
     timestamp_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # 定义格式化指标的辅助函数
@@ -533,19 +541,34 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
         except (ValueError, TypeError): 
             return 'N/A'
 
-    # 保存性能指标为JSON (使用新 metrics 结构)
+    # 保存性能指标为JSON
     serializable_metrics = {k: v.tolist() if isinstance(v, np.ndarray) else v
                              for k, v in metrics.items()}
-    metrics_path = os.path.join(result_dir, 'metrics.json')
+    metrics_filename = f"metrics_final_{test_set_name}.json"
+    metrics_path = os.path.join(result_dir, metrics_filename)
     try:
         with open(metrics_path, 'w', encoding='utf-8') as f:
             json.dump(serializable_metrics, f, indent=4, ensure_ascii=False)
-        print(f"Performance metrics saved to: {metrics_path}")
+        print(f"Final performance metrics saved to: {metrics_path}")
     except Exception as e:
-        print(f"Error saving metrics JSON: {e}")
+        print(f"Error saving final metrics JSON: {e}")
         print(traceback.format_exc())
 
-    # 保存混淆矩阵为图片 (使用新 metrics 结构)
+    # 保存原始结果列表为JSON (根据标志)
+    if save_detailed_flag:
+        results_list_filename = f"results_list_final_{test_set_name}.json"
+        results_list_path = os.path.join(result_dir, results_list_filename)
+        try:
+            with open(results_list_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=4, ensure_ascii=False) # 'results' is the list of dicts
+            print(f"Final results list saved to: {results_list_path}")
+        except Exception as e:
+            print(f"Error saving final results list JSON: {e}")
+            print(traceback.format_exc())
+    else:
+        print("Skipping saving final detailed results list as per configuration.")
+
+    # 保存混淆矩阵为图片
     if 'confusion_matrix' in metrics and metrics['confusion_matrix'] is not None:
          cm_data = np.array(metrics['confusion_matrix'])
          cm_labels = metrics.get('confusion_matrix_labels', ['W', 'N1', 'N2', 'N3', 'N4', 'R'])
@@ -556,14 +579,15 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
                              xticklabels=cm_labels, yticklabels=cm_labels)
                  plt.xlabel('Predicted Label')
                  plt.ylabel('True Label')
-                 plt.title('Sleep Stage Classification Confusion Matrix')
+                 plt.title(f'Sleep Stage Confusion Matrix ({test_set_name})')
                  plt.tight_layout()
-                 cm_path = os.path.join(result_dir, 'confusion_matrix.png')
+                 cm_filename = f"confusion_matrix_final_{test_set_name}.png"
+                 cm_path = os.path.join(result_dir, cm_filename)
                  plt.savefig(cm_path)
                  plt.close()
-                 print(f"混淆矩阵图已保存至: {cm_path}")
+                 print(f"Final confusion matrix plot saved to: {cm_path}")
              except Exception as e:
-                 print(f"Error saving confusion matrix plot: {e}")
+                 print(f"Error saving final confusion matrix plot: {e}")
                  print(traceback.format_exc())
                  plt.close()
          else:
@@ -571,7 +595,7 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
     else:
          print("最终指标中缺少混淆矩阵数据，跳过绘图。")
 
-    # 保存测试样本分布统计 (基于 results 列表中的有效真实标签)
+    # 保存测试样本分布统计
     class_counts = {}
     valid_true_labels_in_results = [r['true_label'] for r in results if r.get('true_label', -99) >= 0]
     total_valid_true_samples = len(valid_true_labels_in_results)
@@ -592,11 +616,12 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
         if filtered_sizes:
              plt.pie(filtered_sizes, labels=filtered_labels, autopct='%1.1f%%', startangle=90)
              plt.axis('equal')
-             plt.title(f'Test Sample Distribution (Valid True Labels: {total_valid_true_samples})')
-             dist_path = os.path.join(result_dir, 'sample_distribution.png')
+             plt.title(f'Test Sample Distribution ({test_set_name} - Valid True Labels: {total_valid_true_samples})')
+             dist_filename = f"sample_distribution_final_{test_set_name}.png"
+             dist_path = os.path.join(result_dir, dist_filename)
              plt.savefig(dist_path)
              plt.close()
-             print(f"Sample distribution chart saved to: {dist_path}")
+             print(f"Final sample distribution chart saved to: {dist_path}")
         else:
              print("没有有效的真实标签样本，无法生成分布图。")
              plt.close()
@@ -605,12 +630,13 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
         print(traceback.format_exc())
         plt.close()
 
-    # 保存性能指标摘要为文本文件 (使用新 metrics 结构)
-    summary_path = os.path.join(result_dir, 'summary.txt')
+    # 保存性能指标摘要为文本文件
+    summary_filename = f"summary_final_{test_set_name}.txt"
+    summary_path = os.path.join(result_dir, summary_filename)
     try:
         with open(summary_path, 'w', encoding='utf-8') as f:
             f.write("=" * 65 + "\n")
-            f.write("Sleep Stage Classification Test Results Summary\n")
+            f.write(f"Sleep Stage Classification Test Results Summary ({test_set_name})\n")
             f.write("=" * 65 + "\n\n")
             f.write(f"Test Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Model Name: {model_name}\n")
@@ -662,39 +688,34 @@ def save_results(results, metrics, test_data, result_dir, model_name="unknown_mo
                 # 直接写入格式化的行
                 f.write(row_fmt.format(label_name, acc_str, p_str, r_str, f1_str))
 
-        print(f"Test summary saved to: {summary_path}")
+        print(f"Final test summary saved to: {summary_path}")
     except Exception as e:
         print(f"Error saving summary text file: {e}")
         print(traceback.format_exc())
 
-    # 调用函数保存结果为Excel表格 (使用新 metrics)
-    save_results_to_excel(results, metrics, None, result_dir, model_name, test_set_name)
+    # 调用函数保存结果为Excel表格
+    save_results_to_excel(results, metrics, result_dir, model_name, test_set_name, is_intermediate=False, save_detailed_flag=save_detailed_flag)
 
-    # 更新总表格文件 (使用新 metrics)
-    try:
-         dir_timestamp = os.path.basename(result_dir).split('_')[-1]
-         if not (len(dir_timestamp) == 15 and dir_timestamp[:8].isdigit() and dir_timestamp[9:].isdigit()):
-              print(f"警告: 从目录 '{result_dir}' 提取的时间戳格式不符，使用当前时间替代。")
-              dir_timestamp = timestamp_str
-    except Exception:
-         print(f"警告: 无法从目录 '{result_dir}' 提取时间戳，使用当前时间替代。")
-         dir_timestamp = timestamp_str
-
-    parent_save_dir = os.path.dirname(result_dir)
-    update_summary_excel(results, metrics, test_data, parent_save_dir, model_name, test_set_name, dir_timestamp)
+    # 更新总表格文件 (确保保存在顶层 save_dir)
+    # parent_save_dir = os.path.dirname(result_dir) # Old logic, could be wrong if result_dir is already top level or deeper
+    # if not parent_save_dir: 
+    #     parent_save_dir = "."
+    update_summary_excel(results, metrics, test_data, top_level_save_dir, model_name, test_set_name, timestamp_str)
 
 
-def save_results_to_excel(results, metrics, _, save_dir, model_name="unknown_model", test_set_name="unknown_dataset"):
+def save_results_to_excel(results, metrics, save_dir, model_name="unknown_model", test_set_name="unknown_dataset", is_intermediate=False, save_detailed_flag=False):
     """保存测试结果为Excel表格文件
-       (更新版：使用新的 metrics 结构, 忽略第三个参数, 保存到指定 save_dir)
+       (更新版：文件名包含 _intermediate 或 _final 及 test_set_name, 
+        固定的汇总表在前，详细的"预测结果"表在后且根据 save_detailed_flag 控制)
 
     Args:
         results: 详细测试结果列表 (list of dicts)
         metrics: 计算出的性能指标字典
-        _: Placeholder for the ignored third argument (previously test_data)
-        save_dir: 保存 Excel 文件的目录 (通常是特定运行的 result_dir 或 intermediate_dir)
+        save_dir: 保存 Excel 文件的目录 (通常是特定运行的 result_dir)
         model_name: 模型名称
         test_set_name: 测试集名称
+        is_intermediate: 布尔值，指示是否为中间结果
+        save_detailed_flag: 布尔值，指示是否保存详细API响应
     """
     try:
         # 导入必要的模块
@@ -724,85 +745,17 @@ def save_results_to_excel(results, metrics, _, save_dir, model_name="unknown_mod
              except (ValueError, TypeError): return 'N/A'
 
         # Excel 文件保存在指定的 save_dir 中
-        excel_filename = f'{model_name}_{test_set_name}_detailed_results.xlsx'
-        if 'intermediate' in os.path.basename(save_dir):
-             excel_filename = f'{model_name}_{test_set_name}_intermediate_detailed_results.xlsx'
+        if is_intermediate:
+            excel_filename = f'detailed_excel_intermediate_{test_set_name}.xlsx'
+        else:
+            excel_filename = f'detailed_excel_final_{test_set_name}.xlsx'
         excel_path = os.path.join(save_dir, excel_filename)
 
         wb = Workbook()
 
-        # --- 1. 预测结果工作表 ---
-        ws_results = wb.active
-        ws_results.title = "预测结果"
-
-        headers = ["样本ID", "真实标签", "预测标签", "标签状态", "是否正确", "预测时间(秒)", "预测文本"]
-        ws_results.append(headers)
-
-        # 设置表头样式
-        for cell in ws_results[1]:
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = center_alignment
-            cell.border = border
-
-        # 添加数据
-        for r in results:
-             pred_label = r.get('prediction', -2)
-             true_label = r.get('true_label', -99)
-             is_correct = r.get('correct', False)
-
-             prediction_display = str(pred_label)
-             label_status = ""
-             fill_color = None
-
-             if pred_label == -1:
-                 prediction_display = "提取失败"
-                 label_status = "提取失败 (-1)"
-                 fill_color = unknown_fill
-             elif pred_label == -2:
-                 prediction_display = "处理错误"
-                 label_status = "处理错误 (-2)"
-                 fill_color = error_fill
-             elif pred_label < 0:
-                 prediction_display = f"无效代码({pred_label})"
-                 label_status = f"无效代码 ({pred_label})"
-                 fill_color = error_fill
-             else:
-                 label_status = f"有效 ({pred_label})"
-                 if true_label >= 0:
-                      if is_correct:
-                           fill_color = correct_fill
-                      else:
-                           fill_color = incorrect_fill
-                 else:
-                      fill_color = None
-
-             correctness_display = is_correct if pred_label >= 0 and true_label >= 0 else 'N/A'
-
-             inf_time = r.get('inference_time')
-             inf_time_display = f"{inf_time:.4f}" if isinstance(inf_time, (int, float)) else 'N/A'
-
-             row_data = [
-                 r.get('id', 'N/A'),
-                 true_label if true_label >= 0 else f"无效({true_label})",
-                 prediction_display,
-                 label_status,
-                 correctness_display,
-                 inf_time_display,
-                 r.get('response', '')
-             ]
-             ws_results.append(row_data)
-
-             # 应用行样式和条件格式
-             current_row = ws_results.max_row
-             for col_idx, cell in enumerate(ws_results[current_row], 1):
-                 cell.border = border
-                 cell.alignment = left_alignment if col_idx == 7 else center_alignment
-                 if fill_color:
-                      cell.fill = fill_color
-
-        # --- 2. 总体指标工作表 ---
-        ws_metrics = wb.create_sheet("总体指标")
+        # --- 1. 总体指标工作表 --- (作为第一个表)
+        ws_metrics = wb.active # 第一个表
+        ws_metrics.title = "总体指标"
 
         # 使用内部定义的 get_metric 辅助函数
         def get_metric_value(key, fmt=None):
@@ -859,7 +812,7 @@ def save_results_to_excel(results, metrics, _, save_dir, model_name="unknown_mod
              if is_header_row:
                   cell_b.fill = header_fill
 
-        # --- 3. 详细类别指标工作表 ---
+        # --- 2. 详细类别指标工作表 --- (第二个固定表)
         ws_class_metrics = wb.create_sheet("详细类别指标")
 
         headers_class = ["睡眠阶段", "准确率", "精确率", "召回率", "F1分数"]
@@ -900,7 +853,7 @@ def save_results_to_excel(results, metrics, _, save_dir, model_name="unknown_mod
                  cell.alignment = left_alignment if col_idx == 1 else center_alignment
                  if col_idx == 1: cell.font = subheader_font
 
-        # --- 4. 混淆矩阵工作表 ---
+        # --- 3. 混淆矩阵工作表 --- (第三个固定表)
         ws_cm = wb.create_sheet("混淆矩阵")
         ws_cm.append(["混淆矩阵 (基于有效预测)"])
         num_labels_cm = len(cm_labels_final)
@@ -938,6 +891,78 @@ def save_results_to_excel(results, metrics, _, save_dir, model_name="unknown_mod
                           cell.fill = correct_fill
         else:
              ws_cm.append(["混淆矩阵数据无效或缺失"])
+
+        # --- 按需创建：预测结果子表 (作为最后一个表，包含所有细节) ---
+        if save_detailed_flag:
+            ws_results_detailed = wb.create_sheet("预测结果") # 子表名称恢复为 "预测结果"
+            
+            headers_pred_results = ["样本ID", "真实标签", "预测标签", "标签状态", "是否正确", "预测时间(秒)", "预测文本"]
+            ws_results_detailed.append(headers_pred_results)
+
+            # 设置表头样式
+            for cell in ws_results_detailed[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_alignment
+                cell.border = border
+
+            # 添加数据
+            for r in results:
+                 pred_label = r.get('prediction', -2)
+                 true_label = r.get('true_label', -99)
+                 is_correct = r.get('correct', False)
+
+                 prediction_display = str(pred_label)
+                 label_status = ""
+                 fill_color = None
+
+                 if pred_label == -1:
+                     prediction_display = "提取失败"
+                     label_status = "提取失败 (-1)"
+                     fill_color = unknown_fill
+                 elif pred_label == -2:
+                     prediction_display = "处理错误"
+                     label_status = "处理错误 (-2)"
+                     fill_color = error_fill
+                 elif pred_label < 0: 
+                     prediction_display = f"无效代码({pred_label})"
+                     label_status = f"无效代码 ({pred_label})"
+                     fill_color = error_fill
+                 else:
+                     label_status = f"有效 ({pred_label})"
+                     if true_label >= 0:
+                          if is_correct:
+                               fill_color = correct_fill
+                          else:
+                               fill_color = incorrect_fill
+                     else:
+                          fill_color = None # 真实标签无效时，无对错颜色
+
+                 correctness_display = is_correct if pred_label >= 0 and true_label >= 0 else 'N/A'
+
+                 inf_time = r.get('inference_time')
+                 inf_time_display = f"{inf_time:.4f}" if isinstance(inf_time, (int, float)) else 'N/A'
+
+                 row_data = [
+                     r.get('id', 'N/A'),
+                     true_label if true_label >= 0 else f"无效({true_label})",
+                     prediction_display,
+                     label_status,
+                     correctness_display,
+                     inf_time_display,
+                     r.get('response', '') # 包含完整的API响应文本
+                 ]
+                 ws_results_detailed.append(row_data)
+
+                 # 应用行样式和条件格式
+                 current_row = ws_results_detailed.max_row
+                 for col_idx, cell in enumerate(ws_results_detailed[current_row], 1):
+                     cell.border = border
+                     cell.alignment = left_alignment if col_idx == 7 else center_alignment # 第7列是预测文本，左对齐
+                     if fill_color:
+                          cell.fill = fill_color
+        else:
+            print(f"Excel报告中未包含详细的逐样本'预测结果'子表 (根据 --save_detailed_results 设置)。")
 
         # --- 调整所有工作表的列宽 ---
         for ws in wb.worksheets:
@@ -1117,29 +1142,57 @@ def update_summary_excel(results, metrics, test_data, save_dir, model_name, test
 
 
 if __name__ == '__main__':
-    # 设置API端口
-    port = os.environ.get("API_PORT", 8001)
-    
+    # --- 配置 argparse --- 
+    parser = argparse.ArgumentParser(description="运行 API 推理测试并评估模型性能。")
+    parser.add_argument("--api_port", type=int, default=os.environ.get("API_PORT", 8001),
+                        help="OpenAI 兼容 API 服务器的端口号。")
+    parser.add_argument("--model_id", type=int, default=2, choices=[1, 2],
+                        help="测试模型的编号：1 代表 llama3.2-1b-instruct，2 代表 qwen3-0.6B。默认为1。")
+    parser.add_argument("--test_data_path", type=str, 
+                        default=os.environ.get("TEST_DATA_PATH", "/data/lhc/datasets_new/emotion/test/sleep_st_11_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok10008_bal0.1_sqrt_inverse_202505141254_test.json"),
+                        help="测试数据 JSON 文件的路径。")
+    parser.add_argument("--max_samples", type=int, default=os.environ.get("MAX_SAMPLES", None),
+                        help="从测试数据中处理的最大样本数。如果为 None，则处理所有样本。")
+    parser.add_argument("--save_dir", type=str, default=os.environ.get("SAVE_DIR", "/data/lhc/results"),
+                        help="保存结果的目录。")
+    parser.add_argument("--print_interval", type=int, default=os.environ.get("PRINT_INTERVAL", 10),
+                        help="向控制台打印中间结果的间隔。")
+    parser.add_argument("--save_interval", type=int, default=os.environ.get("SAVE_INTERVAL", None), # None 表示动态默认值
+                        help="向文件保存中间结果的间隔。如果未设置，则使用动态默认值。")
+    parser.add_argument("--max_tokens", type=int, default=os.environ.get("MAX_TOKENS", 60000),
+                        help="API 请求的最大 token 数。")
+    parser.add_argument("--save_detailed_results", action="store_true", 
+                        help="设置此标志以保存详细的逐样本预测信息。默认为 False (不保存)。")
+
+    args = parser.parse_args()
+
     # 初始化OpenAI客户端
     client = OpenAI(
         api_key="0",
-        base_url=f"http://localhost:{port}/v1",
+        base_url=f"http://localhost:{args.api_port}/v1", # 使用 args.api_port
     )
-    
-    # 获取测试数据路径和模型名称
-    default_test_path = "/data/lhc/datasets_new/emotion/test/sleep_st_1_100hz_eeg10s-step10s_emo2.0s-step0.5s_win5_tokenizer_qwen_tok12330_bal0.5_sqrt_inverse_202505122158_test.json"
-    test_data_path = os.environ.get("TEST_DATA_PATH", default_test_path)
 
+    # 根据 model_id 确定 model_name
+    model_id_to_name_map = {
+        1: "llama3.2-1b-instruct",
+        2: "qwen3-0.6B"
+    }
+    selected_model_name = model_id_to_name_map.get(args.model_id)
+
+    if selected_model_name is None: # Should not happen due to choices=[1,2]
+        print(f"错误：无效的模型编号 {args.model_id}。请从 {list(model_id_to_name_map.keys())} 中选择。")
+        exit(1)
+    
     # 添加文件存在性检查
-    if not os.path.exists(test_data_path):
-        print(f"错误：测试数据文件未找到: {test_data_path}")
-        print("请检查路径是否正确，或通过环境变量 TEST_DATA_PATH 指定有效路径。")
+    if not os.path.exists(args.test_data_path):
+        print(f"错误：测试数据文件未找到: {args.test_data_path}")
+        print("请检查路径是否正确，或通过命令行参数 --test_data_path 指定有效路径。")
         exit(1)
 
     try:
-        max_samples_env = os.environ.get("MAX_SAMPLES")
-        max_samples = int(max_samples_env) if max_samples_env and max_samples_env.isdigit() else None
-        test_data = load_test_data(test_data_path, max_samples=max_samples)
+        # MAX_SAMPLES from args can be None or int
+        max_samples_to_load = args.max_samples if args.max_samples is not None and args.max_samples > 0 else None
+        test_data = load_test_data(args.test_data_path, max_samples=max_samples_to_load)
         if not test_data:
              print("错误：加载测试数据后列表为空。")
              exit(1)
@@ -1149,7 +1202,7 @@ if __name__ == '__main__':
         exit(1)
 
     # 从测试数据路径中提取测试集名称
-    file_basename = os.path.basename(test_data_path).split('.')[0]
+    file_basename = os.path.splitext(os.path.basename(args.test_data_path))[0]
     test_set_name = file_basename
     suffixes_to_remove = [r'_test', r'_train', r'_val', r'_n\d+', r'_\d{8,}(?:_\d{4,})?', r'_tok\d+', r'bal[\d.]+', r'sqrt_inverse', r'_all', r'_win']
     for suffix in suffixes_to_remove:
@@ -1159,44 +1212,40 @@ if __name__ == '__main__':
     if not test_set_name:
         test_set_name = file_basename
 
-    # 尝试从环境变量或配置中获取模型名称
-    model_name = os.environ.get("MODEL_NAME", "emotion_st44")
-
-    print(f"模型: {model_name}")
-    print(f"测试集: {test_set_name} (来自: {os.path.basename(test_data_path)})")
+    print(f"模型: {selected_model_name} (ID: {args.model_id})")
+    print(f"测试集: {test_set_name} (来自: {os.path.basename(args.test_data_path)})")
     print(f"加载了 {len(test_data)} 个测试样本")
+    if args.max_samples is not None and args.max_samples > 0:
+        print(f"(已通过 --max_samples 限制为 {args.max_samples} 个样本)")
 
-    # 创建保存结果的目录 (主目录，子目录在 evaluate_model 中创建)
-    save_dir = os.environ.get("SAVE_DIR", "/data/lhc/results")
-    os.makedirs(save_dir, exist_ok=True)
+    # 创建保存结果的目录
+    os.makedirs(args.save_dir, exist_ok=True)
 
-    # 设置打印和保存的间隔
-    print_interval = int(os.environ.get("PRINT_INTERVAL", 10))
-    # 计算默认保存间隔为总样本数的十分之一，确保至少为1
-    default_save_interval = max(1, len(test_data) // 10) if test_data else 100
-    save_interval = int(os.environ.get("SAVE_INTERVAL", default_save_interval))
-    print(f"打印间隔: {print_interval}, 保存间隔: {save_interval} (默认为总样本数的1/10)")
+    # 设置保存间隔 (如果用户没有通过命令行提供)
+    if args.save_interval is None:
+        default_save_interval = max(1, len(test_data) // 20) if test_data else 100
+        actual_save_interval = default_save_interval
+    else:
+        actual_save_interval = args.save_interval
+    
+    print(f"打印间隔: {args.print_interval}, 保存间隔: {actual_save_interval}")
+    if args.save_interval is None:
+        print("(保存间隔为动态计算的默认值: 总样本数的1/20或100)")
 
-    # 获取 max_tokens for API calls
-    default_max_tokens = 60000
-    max_tokens_env = os.environ.get("MAX_TOKENS")
-    try:
-         max_tokens = int(max_tokens_env) if max_tokens_env else default_max_tokens
-    except ValueError:
-         print(f"警告: 无效的 MAX_TOKENS 环境变量值 '{max_tokens_env}'. 使用默认值 {default_max_tokens}.")
-         max_tokens = default_max_tokens
-    print(f"API 最大 Token 数: {max_tokens}")
+    print(f"API 最大 Token 数: {args.max_tokens}")
+    print(f"是否保存详细逐样本预测信息: {args.save_detailed_results}")
 
     # 评估模型
     metrics = evaluate_model(
         client,
         test_data,
-        print_interval=print_interval,
-        save_interval=save_interval,
-        save_dir=save_dir,
-        model_name=model_name,
+        print_interval=args.print_interval,
+        save_interval=actual_save_interval, # 使用计算或指定的保存间隔
+        save_dir=args.save_dir,
+        model_name=selected_model_name, # 使用通过ID确定的模型名称
         test_set_name=test_set_name,
-        max_tokens=max_tokens
+        max_tokens=args.max_tokens,
+        args=args # 传递整个 args 对象，以便 evaluate_model 内部的 save_intermediate_results 可以访问 save_detailed_results
     )
 
     print("\n测试完成!")

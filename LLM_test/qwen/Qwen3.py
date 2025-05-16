@@ -1,6 +1,6 @@
 from modelscope import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "/data/lhc/models/Qwen/Qwen3-0.6B"
+model_name = "/data/lhc/models_new/Qwen3-0.6B_sleep_st_44_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok9689_bal0.5_sqrt_inverse_202505130318_train/final_20250514_052715"
 
 # load the tokenizer and the model
 tokenizer = AutoTokenizer.from_pretrained(model_name)

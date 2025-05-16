@@ -2826,33 +2826,36 @@ def main():
 
     # --- 使用参数映射简化参数定义 ---
     param_mapping = {
-        'input_dir': '/data/lhc/datasets/sleep-edfx',
+        'input_dir': '/data/lhc/datasets/sleep-edfx', # 输入目录
         # 'output_dir': '/data/lhc/datasets_new/emotion', # 不再直接使用
-        'max_files': 44,
-        'n_jobs': 44,    # 确认调试时使用 n_jobs=1
-        'target_sfreq': 100,
-        'balance_strategy': 'balanced', #'none',
-        'balance_alpha': 0.5,
-        'weight_method': 'sqrt_inverse',
-        'file_pattern': None,
-        'file_type': 'st',
-        'include_emotion': True,
-        'emotion_model_dir': '/data/lhc/models/emotion',
-        'emotion_window_length': 2.0,
-        'emotion_step_size': 0.25,
-        'resolve_emotion_conflict': False,
-        'device': 'cpu',
-        'add_noise': False,
-        # --- 修改：更新 max_windows 的注释 ---
-        'max_windows': 0, # 每个睡眠阶段最多处理的窗口数。0 或 None 表示不限制。使用正整数（如 1 或 10）进行快速调试。
+        'max_files': 153, # 最大处理文件数
+        'n_jobs': 32,    # 并行处理任务数，调试时建议设为1
+        'target_sfreq': 100, # 目标采样频率 (Hz)
+        'balance_strategy': 'balanced', # 数据集平衡策略 ('balanced', 'none', 'original')
+        'balance_alpha': 0.5, # 平衡因子 (0表示完全均衡, 1表示原始分布)
+        'weight_method': 'sqrt_inverse', # 权重计算方法 ('inverse', 'sqrt_inverse', 'log_inverse')
+        'file_pattern': None, # 文件匹配模式 (例如 "SC40*.edf")
+        'file_type': 'sc', # 文件类型 ('sc', 'st', 'all')
+        'include_emotion': True, # 是否包含情绪特征
+        'emotion_model_dir': '/data/lhc/models/emotion', # 情绪模型目录
+        # --- 修改：移除 emotion_step_size 作为独立命令行参数 ---
+        # 'emotion_step_size': 0.5, # 情绪特征提取步长 (秒)
         # --- 结束修改 ---
-        'timeout': 300000,
-        'normalize_features': True,
-        'eeg_window_sec': 7.5,
-        # --- 新增：EEG 窗口滑动步长参数 ---
-        'eeg_step_sec': 7.5, # 默认步长等于窗口长度 (无重叠)
-        # --- 结束新增 ---
-        'tokenizer_path': "/data/lhc/models/Qwen/Qwen3-0.6B",  # 由main动态设置
+        'resolve_emotion_conflict': False, # 是否解决情绪预测冲突
+        'device': 'cpu', # 运行设备 ('cpu', 'gpu', 'auto')
+        'add_noise': False, # 是否添加噪声
+        # --- 修改：更新 max_windows 的注释 ---
+        'max_windows': 0, # 每个睡眠阶段最多处理的EEG窗口数。0 或 None 表示不限制。使用正整数（如 1 或 10）进行快速调试。
+        # --- 结束修改 ---
+        'timeout': 300000, # 单个文件处理超时时间 (秒)
+        'normalize_features': True, # 是否标准化情绪特征
+        # --- 修改：移除 eeg_window_sec 和 eeg_step_sec 作为独立命令行参数 ---
+        # 'eeg_window_sec': 15, # EEG数据窗口长度 (秒)
+        # 'eeg_step_sec': 15, # EEG 窗口滑动步长 (秒), 默认步长等于窗口长度 (无重叠)
+        # --- 结束修改 ---
+        # --- 修改：tokenizer_path 使用编号映射 ---
+        'tokenizer_id': 1,  # 分词器ID: 1 for Llama-3.2-1B, 2 for Qwen3-0.6B (默认为1)
+        # --- 结束修改 ---
     }
 
     # --- 定义固定的输出目录 ---
@@ -2867,14 +2870,18 @@ def main():
     # --- 添加命令行参数 (会自动包含新增的 eeg_step_sec) ---
     for param, default in param_mapping.items():
         arg_name = f'--{param.replace("_", "-")}'
+        help_text = f'{param} (默认: {default})'
+        if param == 'tokenizer_id':
+            help_text = '分词器ID: 1 for Llama-3.2-1B (/data/lhc/models/Llama-3.2-1B-Instruct), 2 for Qwen3-0.6B (/data/lhc/models/Qwen/Qwen3-0.6B) (默认: 2)'
+        
         if isinstance(default, bool):
-             parser.add_argument(arg_name, action=argparse.BooleanOptionalAction, default=default, help=f'{param} (default: {default})')
+             parser.add_argument(arg_name, action=argparse.BooleanOptionalAction, default=default, help=help_text)
         elif isinstance(default, int):
-            parser.add_argument(arg_name, type=int, default=default, help=f'{param} (default: {default})')
+            parser.add_argument(arg_name, type=int, default=default, help=help_text)
         elif isinstance(default, float):
-             parser.add_argument(arg_name, type=float, default=default, help=f'{param} (default: {default})')
+             parser.add_argument(arg_name, type=float, default=default, help=help_text)
         else:
-            parser.add_argument(arg_name, type=str, default=default, help=f'{param} (default: {default})')
+            parser.add_argument(arg_name, type=str, default=default, help=help_text)
 
 
     args = parser.parse_args()
@@ -2889,10 +2896,51 @@ def main():
 
     # --- 更新全局 tokenizer_path ---
     global tokenizer_path # 声明我们要修改全局变量
-    # 现在可以安全地访问，因为上面的循环保证了 key 的存在
-    tokenizer_path = parsed_params['tokenizer_path']
-    safe_print(f"Tokenizer path set to: {tokenizer_path} (from command line or default)")
-    # --- 结束更新全局 tokenizer_path ---
+    
+    # --- 新增：根据 tokenizer_id 设置 tokenizer_path ---
+    tokenizer_id_map = {
+        1: "/data/lhc/models/Llama-3.2-1B-Instruct", # Llama
+        2: "/data/lhc/models/Qwen/Qwen3-0.6B"      # Qwen
+    }
+    # --- 新增：定义与 tokenizer_id 相关的参数配置 ---
+    tokenizer_specific_configs = {
+        1: { # Llama 配置
+            'emotion_step_size': 0.5,
+            'eeg_window_sec': 15.0,
+            'eeg_step_sec': 15.0,
+        },
+        2: { # Qwen 配置
+            'emotion_step_size': 0.25,
+            'eeg_window_sec': 7.5,
+            'eeg_step_sec': 7.5,
+        }
+    }
+
+    selected_tokenizer_id = parsed_params.get('tokenizer_id', 1) # 默认为1 (Llama)
+    
+    if selected_tokenizer_id in tokenizer_id_map:
+        tokenizer_path = tokenizer_id_map[selected_tokenizer_id]
+        safe_print(f"根据ID {selected_tokenizer_id} 设置 Tokenizer path 为: {tokenizer_path}")
+    else:
+        safe_print(f"警告: 无效的 tokenizer_id '{selected_tokenizer_id}'。将使用默认 Llama (ID 1)。")
+        selected_tokenizer_id = 1 # 确保 tokenizer_id 对后续步骤有效
+        tokenizer_path = tokenizer_id_map[selected_tokenizer_id]
+    
+    # --- 新增：根据 selected_tokenizer_id 更新相关参数 ---
+    if selected_tokenizer_id in tokenizer_specific_configs:
+        specific_configs = tokenizer_specific_configs[selected_tokenizer_id]
+        parsed_params.update(specific_configs) # 将特定配置更新到 parsed_params
+        safe_print(f"根据 Tokenizer ID {selected_tokenizer_id} 加载特定参数配置: {specific_configs}")
+    else:
+        # 此情况理论上不会发生，因为 selected_tokenizer_id 已被规范化
+        safe_print(f"警告: Tokenizer ID {selected_tokenizer_id} 没有在 tokenizer_specific_configs 中定义特定参数。将使用ID 1的默认值。")
+        specific_configs = tokenizer_specific_configs[1]
+        parsed_params.update(specific_configs)
+    # --- 结束新增 ---
+
+    # 从 parsed_params 中移除 tokenizer_id，因为它已被用于设置 tokenizer_path 和其他参数
+    parsed_params.pop('tokenizer_id', None)
+    # --- 结束新增 ---
 
     # --- 强制 n_jobs=1 进行调试 (可选) ---
     # parsed_params['n_jobs'] = 1
@@ -2933,12 +2981,12 @@ def main():
 
     # --- 新增：根据 tokenizer_path 确定 tokenizer_name ---
     tokenizer_name = "unknown" # 默认名称
-    if tokenizer_path:
+    if tokenizer_path: # tokenizer_path 现在是实际路径
         path_lower = tokenizer_path.lower()
-        if '/qwen/' in path_lower or 'qwen3-0.6b' in path_lower:
-            tokenizer_name = "qwen"
-        elif 'llama-3.2-1b-instruct' in path_lower:
-            tokenizer_name = "llama"
+        if 'llama-3.2-1b-instruct' in path_lower:
+            tokenizer_name = "llama3.2-1b"
+        elif 'qwen3-0.6b' in path_lower or 'qwen' in path_lower: # 包含更通用的qwen检查
+            tokenizer_name = "qwen0.6b"
         else:
             try:
                 basename = os.path.basename(tokenizer_path)

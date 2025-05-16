@@ -5,11 +5,11 @@
 
 # 设置关键路径变量
 SCRIPT_DIR="/data/lhc/projects/EEG2LLM"
-TRAIN_SCRIPT="${SCRIPT_DIR}/train_old.py"
+TRAIN_SCRIPT="${SCRIPT_DIR}/train/train_old.py"
 MODEL_NAME="/data/lhc/models/Qwen/Qwen3-0.6B"
 DATASET_DIR="/data/lhc/datasets_new/emotion"
-TRAIN_DATASET="train/sleep_st_44_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok9689_bal0.5_sqrt_inverse_202505130318_train"  # 完整的相对路径
-TEST_DATASET="test/sleep_st_44_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok9689_bal0.5_sqrt_inverse_202505130318_test"     # 完整的相对路径
+TRAIN_DATASET="train/sleep_st_11_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok10008_bal0.1_sqrt_inverse_202505141254_train"  # 完整的相对路径
+TEST_DATASET="test/sleep_st_11_100hz_eeg7.5s-step7.5s_emo2.0s-step0.25s_win_all_tokenizer_qwen_tok10008_bal0.1_sqrt_inverse_202505141254_test"     # 完整的相对路径
 
 # 新增：设置是否使用 DeepSpeed，"true" 或 "false"
 USE_DEEPSPEED="false"

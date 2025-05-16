@@ -21,16 +21,16 @@
     -   自动进行训练集/测试集划分。
     -   生成详细的数据集统计报告 (Excel和JSON格式)。
 -   **模型训练与微调 (Train)**:
-    -   （推测）提供基于 `LLaMA-Factory` 的高效微调脚本 (如 `train_balanced.sh`, `train_emotion.sh`)。
-    -   （推测）支持使用LoRA (Low-Rank Adaptation) 等参数高效微调技术。
-    -   （推测）可能包含针对不同数据集（如基础版、情绪增强版）的训练配置文件。
+    -   提供基于 `LLaMA-Factory` 的高效微调脚本 (如 `train_balanced.sh`, `train_emotion.sh`)。
+    -   支持使用LoRA (Low-Rank Adaptation) 等参数高效微调技术。
+    -   可能包含针对不同数据集（如基础版、情绪增强版）的训练配置文件。
 -   **模型评估与测试 (`api_infer` 目录)**:
     -   提供脚本进行模型性能的全面评估，计算准确率、F1分数、召回率、精确率以及混淆矩阵等关键指标。
     -   支持对不同模型检查点或不同实验设置下的模型进行基准测试和比较。
 -   **评估结果可视化 (`utils` 目录)**:
     -   提供工具脚本对 `api_infer` 生成的评估结果（如混淆矩阵、性能指标）进行可视化分析，辅助模型调优。
 -   **API服务部署 (Utils/Root)**:
-    -   （推测）提供便捷的API服务部署脚本 (`api.sh` 或类似脚本)，用于将微调后的LLM模型部署为在线推理服务。
+    -   提供便捷的API服务部署脚本 (`api.sh` 或类似脚本)，用于将微调后的LLM模型部署为在线推理服务。
 
 ## 技术特点
 
@@ -188,7 +188,7 @@ conda run -n EEG2LLM python projects/EEG2LLM/data_process/make_emo_data.py \
 
 模型评估和测试相关脚本位于 `/data/lhc/projects/EEG2LLM/api_infer` 目录下。
 
-**示例评估命令 (推测性，请根据实际脚本调整):**
+**示例评估命令 (请根据实际脚本调整):**
 ```bash
 conda run -n EEG2LLM python /data/lhc/projects/EEG2LLM/api_infer/evaluate_model.py \
     --model_checkpoint_path <微调后模型的检查点路径> \
@@ -210,7 +210,7 @@ conda run -n EEG2LLM python /data/lhc/projects/EEG2LLM/utils/visualize_results.p
 ```
 *   该脚本可能用于生成混淆矩阵图、PR曲线、ROC曲线等，帮助分析模型性能。
 
-### 5. API服务部署 (`api.sh` 或 `utils` 目录)
+### 5. API服务部署 (`api.sh` )
 
 **示例部署命令 :**
 ```bash
